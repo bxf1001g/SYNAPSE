@@ -1891,9 +1891,16 @@ class AgentEngine:
 
         # Local execution fallback
         try:
+            # Clean environment: remove conda hooks that break subprocess spawning
+            clean_env = os.environ.copy()
+            # Remove conda/mamba shell hooks that cause "Unable to create process" errors
+            for key in list(clean_env.keys()):
+                if "conda" in key.lower() and key not in ("CONDA_PREFIX", "CONDA_DEFAULT_ENV", "PATH"):
+                    del clean_env[key]
+
             r = subprocess.run(
                 cmd, shell=True, capture_output=True, text=True,
-                cwd=self.workspace, timeout=90,
+                cwd=self.workspace, timeout=90, env=clean_env,
             )
             output = ""
             if r.stdout:
