@@ -35,6 +35,9 @@ steps:
       - '--use-http2=false'
       - '--set-env-vars=SYNAPSE_CLOUD_MODE=1,GEMINI_API_KEY=${_GEMINI_API_KEY},GITHUB_TOKEN=${_GITHUB_TOKEN}'
 
+options:
+  logging: CLOUD_LOGGING_ONLY
+
 substitutions:
   _SERVICE_NAME: synapse
   _REGION: us-central1
