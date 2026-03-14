@@ -105,6 +105,49 @@ A stunning web interface with:
 - Subconscious workspace monitoring pulses
 - Three-panel layout (Architect / Communication / Developer)
 
+### 🧬 Persistent Memory (RAG)
+Long-term memory powered by ChromaDB:
+- Agents auto-save task summaries, solutions, and patterns after each task
+- Semantic search recalls relevant experience before starting new work
+- Memory badge in UI shows count — click to search past memories
+- API: `GET /api/memory`, `POST /api/memory/search`
+
+### 🤖 Dynamic Agent Spawning
+Beyond Architect + Developer — **6 specialist agents** spawn on demand:
+
+| Agent | Specialty | When Spawned |
+|-------|-----------|-------------|
+| 🏗 **Architect** | Plans, reviews, coordinates | Always |
+| 💻 **Developer** | Implements, builds, tests | Always |
+| 🔍 **Researcher** | Web research, docs, comparisons | "research", "investigate", "compare" |
+| 🧪 **Tester** | Unit tests, QA, validation | "test", "QA", "coverage" |
+| 🛡 **Security** | Vulnerability audits, OWASP | "security", "vulnerability", "auth" |
+| ⚙ **DevOps** | Docker, CI/CD, infrastructure | "docker", "deploy", "kubernetes" |
+
+Specialists run in **parallel threads** and report back to the team.
+
+### 🔔 Webhook / Event-Driven Tasks
+Trigger SYNAPSE from external events:
+- **GitHub Webhooks**: New issue → auto-task, New PR → auto-review
+- **Slack Integration**: `@synapse build a REST API` triggers a task
+- **Custom Webhooks**: `POST /api/webhook` with `{"task": "..."}`
+- **Scheduled Tasks**: `POST /api/cron` with cron schedule
+- API: `GET /api/webhook/tasks`, `GET/POST/DELETE /api/cron`
+
+### 🐳 Docker Sandboxed Execution
+Run agent commands in isolated containers:
+- Ephemeral Docker containers with memory/CPU limits
+- Isolated filesystem mounted from workspace
+- Auto-fallback to local execution if Docker unavailable
+- Package installs (pip/npm) always run locally for speed
+
+### 🎤 Voice / Multimodal I/O
+Full multimodal interaction:
+- **🎤 Voice Input** — Click microphone, speak your task (Web Speech API)
+- **🔊 Text-to-Speech** — Toggle TTS for agent responses
+- **📷 Image Upload** — Upload images for Gemini Vision analysis
+- **Vision API**: `POST /api/vision` with image file
+
 ---
 
 ## 🚀 Quick Start
@@ -263,26 +306,35 @@ SYNAPSE_CLOUD_MODE   Set to "1" to disable self-modification
 
 | Feature | SYNAPSE | MoltBot | OpenClaw |
 |---------|---------|---------|----------|
-| **Architecture** | Dual-agent (Architect + Developer) | Single agent | Single agent |
+| **Architecture** | Multi-agent (6 specialists) | Single agent | Single agent |
 | **AI Models** | Gemini 3.1 Pro + OpenAI + Claude + Custom | Model-agnostic | Model-agnostic |
 | **Neural Routing** | 4-cortex brain with TOP model assignment | Single model per task | Single model |
+| **Long-Term Memory** | ✅ ChromaDB RAG — remembers across sessions | ❌ | ❌ |
+| **Dynamic Agents** | ✅ Researcher, Tester, Security, DevOps on-demand | ❌ | ❌ |
+| **Voice I/O** | ✅ Speech-to-text + text-to-speech | ❌ | ❌ |
+| **Webhooks** | ✅ GitHub, Slack, cron, custom triggers | ❌ | ❌ |
+| **Docker Sandbox** | ✅ Isolated container execution | ❌ | ❌ |
 | **Self-Modification** | ✅ Clone-test → swap → auto-rollback | ❌ | ❌ |
 | **Web Crawling** | ✅ Browse any URL, fetch docs/APIs | ❌ | ❌ |
-| **GitHub Integration** | ✅ Clone, push, PRs, issues | ❌ | ❌ |
-| **Cloud Deployment** | ✅ Cloud Run ready with Dockerfile | Manual | Manual |
+| **GitHub Integration** | ✅ Clone, push, PRs, issues, auto-review | ❌ | ❌ |
+| **Cloud Deployment** | ✅ Cloud Run + CI/CD auto-deploy | Manual | Manual |
 | **Parallel Tasks** | ✅ Thread pool with task tabs | Limited | Limited |
-| **Image Generation** | ✅ Gemini 3.1 + DALL-E 3 | ❌ | ❌ |
-| **Agent Collaboration** | ✅ Turn-based Architect↔Developer | N/A | N/A |
-| **Self-Evolving Launcher** | ✅ Backup→Validate→Clone-test→Swap | ❌ | ❌ |
-| **UI** | Iridescent cyber web UI | Web/CLI | Web/CLI |
+| **Image Generation** | ✅ Gemini 3.1 + DALL-E 3 + Vision | ❌ | ❌ |
+| **Vision Analysis** | ✅ Upload images for AI analysis | ❌ | ❌ |
+| **Agent Collaboration** | ✅ Turn-based multi-agent with specialists | N/A | N/A |
+| **UI** | Iridescent cyber web UI with voice | Web/CLI | Web/CLI |
 
 **SYNAPSE's unique advantages:**
-- 🧠 **Multi-model brain** — Different tasks automatically route to the best model (Gemini 3.1 Pro for reasoning)
-- 🤝 **Two-agent collaboration** — Plans are verified, code is tested before delivery
-- 🧬 **Self-evolution** — The system improves itself through safe clone-tested code modification
-- 🌐 **Web-connected** — Agents browse the web for docs, APIs, and latest tech
-- 🐙 **GitHub-native** — Clone, push, PRs, issues directly from agent actions
-- ☁ **Cloud-ready** — Deploy to Cloud Run with one command
+- 🧬 **Long-term memory** — Agents learn from past tasks and recall relevant experience
+- 🤖 **Dynamic specialist teams** — Researcher, Tester, Security, DevOps agents spawn as needed
+- 🎤 **Voice & Vision** — Speak tasks, upload images, listen to responses
+- 🔔 **Event-driven** — GitHub issues auto-trigger tasks, Slack integration, cron scheduling
+- 🐳 **Sandboxed execution** — Docker containers isolate untrusted code
+- 🧠 **Multi-model brain** — Different tasks route to the best model
+- 🤝 **Multi-agent collaboration** — Plans verified, code tested, security audited
+- 🧬 **Self-evolution** — System improves itself through safe clone-tested modification
+- 🌐 **Web-connected** — Agents browse docs, APIs, and latest tech
+- ☁ **Cloud-ready** — Cloud Run + Cloud Build auto-deploy pipeline
 
 ---
 
