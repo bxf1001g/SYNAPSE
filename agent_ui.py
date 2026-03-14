@@ -1416,20 +1416,142 @@ class AgentEngine:
             return f"Image generation failed: {error}"
 
     def _do_self_modify(self, action, agent):
-        """Handle self-modification: write signal file for synapse.py launcher."""
-        # Cloud Run: self-modification disabled (ephemeral containers)
-        if os.environ.get("SYNAPSE_CLOUD_MODE", "").strip() in ("1", "true"):
-            self.emit("error", {"agent": agent, "error": "Self-modification disabled in cloud mode"})
-            return "self_modify: disabled in cloud mode (ephemeral container)"
-
+        """Handle self-modification: local clone-test OR cloud git-push evolution."""
         files = action.get("files", [])
         reason = action.get("reason", "Agent-requested modification")
         if not files:
             self.emit("error", {"agent": agent, "error": "self_modify: no files specified"})
             return "self_modify: no files (nothing to do)"
 
-        # Resolve file paths relative to the project root (where nexus.py lives)
         project_root = os.path.dirname(os.path.abspath(__file__))
+        cloud_mode = os.environ.get("SYNAPSE_CLOUD_MODE", "").strip() in ("1", "true")
+
+        if cloud_mode:
+            return self._do_self_modify_cloud(files, reason, agent, project_root)
+        else:
+            return self._do_self_modify_local(files, reason, agent, project_root)
+
+    def _do_self_modify_cloud(self, files, reason, agent, project_root):
+        """Cloud self-evolution: write files → git commit → push → Cloud Build redeploys."""
+        token = self.config.get("providers", {}).get("github", {}).get("api_key", "")
+        if not token:
+            token = os.environ.get("GITHUB_TOKEN", "")
+
+        branch = f"synapse-evolve-{int(time.time())}"
+        file_list = []
+
+        self.emit("self_modify", {
+            "agent": agent, "reason": reason,
+            "files": [f.get("path", "") for f in files],
+            "mode": "cloud-git-push",
+        })
+
+        try:
+            # 1. Write modified files to disk
+            for f in files:
+                path = f.get("path", "")
+                content = f.get("content", "")
+                if not path or not content:
+                    continue
+                full = os.path.join(project_root, path)
+                os.makedirs(os.path.dirname(full) or ".", exist_ok=True)
+                with open(full, "w", encoding="utf-8") as fh:
+                    fh.write(content)
+                file_list.append(path)
+
+            if not file_list:
+                return "self_modify (cloud): no valid files written"
+
+            # 2. Git: create branch, commit, push
+            git = lambda cmd: subprocess.run(
+                f"git {cmd}", shell=True, cwd=project_root,
+                capture_output=True, text=True, timeout=60,
+            )
+
+            # Configure git for cloud environment
+            git("config user.email synapse-agent@noreply.github.com")
+            git("config user.name SYNAPSE-Agent")
+
+            git(f"checkout -b {branch}")
+            git("add -A")
+            r = git(f'commit -m "evolve: {reason}"')
+            if r.returncode != 0:
+                git("checkout main 2>nul || git checkout master")
+                return f"self_modify (cloud): git commit failed: {r.stderr}"
+
+            # Push using token if available
+            remote_url = git("remote get-url origin").stdout.strip()
+            if token and "github.com" in remote_url:
+                # Inject token into remote URL for auth
+                push_url = remote_url.replace(
+                    "https://github.com",
+                    f"https://x-access-token:{token}@github.com"
+                )
+                r = git(f"push {push_url} {branch}")
+            else:
+                r = git(f"push origin {branch}")
+
+            git("checkout main 2>nul || git checkout master")
+
+            if r.returncode != 0:
+                return f"self_modify (cloud): git push failed: {r.stderr}"
+
+            # 3. Create PR via GitHub API if available
+            pr_url = ""
+            if token and _github_available:
+                try:
+                    g = _Github(token)
+                    # Extract owner/repo from remote URL
+                    import re as _re
+                    m = _re.search(r"github\.com[:/](.+?)(?:\.git)?$", remote_url)
+                    if m:
+                        repo = g.get_repo(m.group(1))
+                        pr = repo.create_pull(
+                            title=f"🧬 SYNAPSE Evolution: {reason}",
+                            body=(
+                                f"**Self-modification by {agent} agent**\n\n"
+                                f"Reason: {reason}\n\n"
+                                f"Files modified: {', '.join(file_list)}\n\n"
+                                f"*This PR was created automatically by SYNAPSE's "
+                                f"self-evolution system running on Cloud Run.*"
+                            ),
+                            head=branch,
+                            base=repo.default_branch,
+                        )
+                        pr_url = pr.html_url
+                except Exception as e:
+                    pr_url = f"(PR creation failed: {e})"
+
+            fl = ", ".join(file_list)
+            self._log(f"[SELF_MODIFY_CLOUD] {reason} — branch: {branch}, files: {fl}")
+
+            result = (
+                f"Self-modification pushed to GitHub!\n"
+                f"Branch: {branch}\n"
+                f"Files: {fl}\n"
+                f"Reason: {reason}\n"
+            )
+            if pr_url:
+                result += f"PR: {pr_url}\n"
+            result += (
+                "Cloud Build will auto-redeploy when PR is merged.\n"
+                "The new version of SYNAPSE will start with these changes."
+            )
+            return result
+
+        except Exception as e:
+            # Attempt to restore main branch
+            try:
+                subprocess.run(
+                    "git checkout main 2>nul || git checkout master",
+                    shell=True, cwd=project_root, timeout=10,
+                )
+            except Exception:
+                pass
+            return f"self_modify (cloud): {e}"
+
+    def _do_self_modify_local(self, files, reason, agent, project_root):
+        """Local self-modification: write signal file for synapse.py launcher."""
         signal_path = os.path.join(project_root, ".synapse_restart")
 
         # Build the signal payload
@@ -1593,6 +1715,40 @@ class AgentEngine:
                           f"Stars: {repo.stargazers_count}\n"
                           f"Description: {repo.description}\n"
                           f"URL: {repo.html_url}")
+
+            elif op == "list_prs":
+                repo_name = action.get("repo", "")
+                state = action.get("state", "open")
+                repo = g.get_repo(repo_name)
+                prs = list(repo.get_pulls(state=state)[:15])
+                result = "\n".join(
+                    f"#{p.number}: {p.title} [{p.state}] by {p.user.login}"
+                    for p in prs
+                ) or f"No {state} pull requests"
+
+            elif op == "merge_pr":
+                repo_name = action.get("repo", "")
+                pr_number = action.get("pr_number", 0)
+                merge_method = action.get("merge_method", "squash")
+                repo = g.get_repo(repo_name)
+                pr = repo.get_pull(int(pr_number))
+                if pr.mergeable:
+                    pr.merge(merge_method=merge_method)
+                    result = f"Merged PR #{pr_number}: {pr.title}"
+                else:
+                    result = f"PR #{pr_number} is not mergeable (conflicts or checks failing)"
+
+            elif op == "get_pr":
+                repo_name = action.get("repo", "")
+                pr_number = action.get("pr_number", 0)
+                repo = g.get_repo(repo_name)
+                pr = repo.get_pull(int(pr_number))
+                result = (f"PR #{pr.number}: {pr.title}\n"
+                          f"State: {pr.state} | Mergeable: {pr.mergeable}\n"
+                          f"Author: {pr.user.login}\n"
+                          f"Branch: {pr.head.ref} → {pr.base.ref}\n"
+                          f"URL: {pr.html_url}")
+
             else:
                 result = f"Unknown github operation: {op}"
 
