@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import base64
+import concurrent.futures
 import glob as globmod
 import json
 import os
@@ -53,7 +54,7 @@ except ImportError:
 
 CORTEX_MODELS = {
     "fast": {
-        "model": "gemini-2.0-flash-lite",
+        "model": "gemini-2.5-flash-lite",
         "label": "⚡ Fast Cortex",
         "desc": "Lightning-fast for classification, simple queries",
         "temperature": 0.2,
@@ -61,7 +62,7 @@ CORTEX_MODELS = {
         "color": "#38bdf8",
     },
     "reason": {
-        "model": "gemini-2.5-pro",
+        "model": "gemini-2.5-flash",
         "label": "🧠 Reasoning Cortex",
         "desc": "Deep thinking for architecture, debugging, complex logic",
         "temperature": 0.4,
@@ -103,9 +104,9 @@ CONFIG_FILE = ".synapse.json"
 
 PROVIDER_MODELS = {
     "gemini": [
-        "gemini-2.0-flash-lite", "gemini-2.0-flash",
-        "gemini-2.5-pro", "gemini-2.5-flash",
-        "gemini-2.5-flash-image", "gemini-2.5-flash-lite",
+        "gemini-2.5-flash-lite", "gemini-2.5-flash",
+        "gemini-2.0-flash", "gemini-2.5-pro",
+        "gemini-2.5-flash-image",
         "gemini-3-pro-preview", "gemini-3-flash-preview",
     ],
     "openai": [
@@ -129,8 +130,8 @@ DEFAULT_CONFIG = {
         },
     },
     "cortex_map": {
-        "fast": {"provider": "gemini", "model": "gemini-2.0-flash-lite"},
-        "reason": {"provider": "gemini", "model": "gemini-2.5-pro"},
+        "fast": {"provider": "gemini", "model": "gemini-2.5-flash-lite"},
+        "reason": {"provider": "gemini", "model": "gemini-2.5-flash"},
         "create": {"provider": "gemini", "model": "gemini-2.0-flash"},
         "visual": {"provider": "gemini", "model": "gemini-2.5-flash-image"},
     },
@@ -189,18 +190,36 @@ class UnifiedChat:
         self._gemini_chat = None
 
         if provider_type == "gemini":
+            gen_config_kwargs = dict(
+                system_instruction=system_prompt,
+                temperature=temperature,
+                max_output_tokens=max_tokens,
+            )
+            # Thinking models (2.5-pro) need explicit thinking config
+            if "2.5-pro" in model or "3-pro" in model or "3.1-pro" in model:
+                gen_config_kwargs["thinking_config"] = types.ThinkingConfig(
+                    thinking_budget=2048
+                )
             self._gemini_chat = client.chats.create(
                 model=model,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    temperature=temperature,
-                    max_output_tokens=max_tokens,
-                ),
+                config=types.GenerateContentConfig(**gen_config_kwargs),
             )
 
     def send_message(self, text):
         if self.provider_type == "gemini":
-            return self._gemini_chat.send_message(text)
+            response = self._gemini_chat.send_message(text)
+            # Handle thinking models that may return None for .text
+            if response.text is None and response.candidates:
+                parts = response.candidates[0].content.parts or []
+                text_parts = [p.text for p in parts if p.text and not getattr(p, "thought", False)]
+                if text_parts:
+                    return _TextResponse("\n".join(text_parts))
+                # All parts are thinking — return the thinking content as text
+                all_text = [p.text for p in parts if p.text]
+                if all_text:
+                    return _TextResponse("\n".join(all_text))
+                return _TextResponse("(No response generated)")
+            return response
 
         elif self.provider_type in ("openai", "openai_compatible"):
             self.messages.append({"role": "user", "content": text})
@@ -301,17 +320,23 @@ class NeuralCortex:
         """One-shot generation for any provider. Returns text."""
         try:
             if provider_type == "gemini":
-                gen_cfg = types.GenerateContentConfig(
+                gen_kwargs = dict(
                     temperature=temperature, max_output_tokens=max_tokens,
                 )
                 if system_prompt:
-                    gen_cfg = types.GenerateContentConfig(
-                        system_instruction=system_prompt,
-                        temperature=temperature, max_output_tokens=max_tokens,
-                    )
+                    gen_kwargs["system_instruction"] = system_prompt
+                # Thinking models need thinking config
+                if "2.5-pro" in model or "3-pro" in model or "3.1-pro" in model:
+                    gen_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=2048)
+                gen_cfg = types.GenerateContentConfig(**gen_kwargs)
                 r = client.models.generate_content(
                     model=model, config=gen_cfg, contents=prompt
                 )
+                # Handle thinking models that return None for .text
+                if r.text is None and r.candidates:
+                    parts = r.candidates[0].content.parts or []
+                    text_parts = [p.text for p in parts if p.text and not getattr(p, "thought", False)]
+                    return "\n".join(text_parts) if text_parts else "(No response)"
                 return r.text
 
             elif provider_type in ("openai", "openai_compatible"):
@@ -879,7 +904,9 @@ class AgentEngine:
                     if i == 0
                     else f"Results:\n{cmd_output}\nNow provide your final 'answer' action."
                 )
-                response = chat.send_message(msg)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(chat.send_message, msg)
+                    response = future.result(timeout=120)
                 parsed = parse_json_response(response.text)
 
                 thinking = parsed.get("thinking", "")
@@ -931,7 +958,7 @@ class AgentEngine:
 
     # ── Build Execution ──────────────────────────────────────
 
-    def start_build(self, task, plan):
+    def start_build(self, task, plan, blocking=False):
         self.running = True
         self.turn = 0
         self.files_created = []
@@ -943,8 +970,6 @@ class AgentEngine:
         arch_prompt = ARCHITECT_PROMPT.format(workspace=self.workspace)
         dev_prompt = DEVELOPER_PROMPT.format(workspace=self.workspace)
 
-        # Select cortex based on task complexity
-        # Architecture uses reasoning cortex, development uses creative cortex
         self.emit("cortex_active", {
             "id": "reason",
             "label": CORTEX_MODELS["reason"]["label"],
@@ -968,10 +993,14 @@ class AgentEngine:
         # Start subconscious monitoring
         self.start_subconscious()
 
-        thread = threading.Thread(
-            target=self._run_build, args=(task, plan), daemon=True
-        )
-        thread.start()
+        if blocking:
+            # Run build synchronously (when already in a background thread)
+            self._run_build(task, plan)
+        else:
+            thread = threading.Thread(
+                target=self._run_build, args=(task, plan), daemon=True
+            )
+            thread.start()
 
     def _run_build(self, task, plan):
         plan_text = json.dumps(plan, indent=2)
@@ -1070,7 +1099,7 @@ class AgentEngine:
             self.emit("build_complete", {})
 
     def _process_turn(self, agent, chat, input_text):
-        """One turn: Gemini call → execute actions → iterate if needed."""
+        """One turn: AI call → execute actions → iterate if needed."""
         self.turn += 1
         current_input = input_text
         peer_message = None
@@ -1099,9 +1128,15 @@ class AgentEngine:
                 },
             )
 
+            # AI call with timeout protection (120s max)
             try:
-                response = chat.send_message(current_input)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(chat.send_message, current_input)
+                    response = future.result(timeout=120)
                 raw = response.text
+            except concurrent.futures.TimeoutError:
+                self.emit("error", {"agent": agent, "error": "AI model timed out (120s). Skipping turn."})
+                return {"type": "chat", "body": f"[Timeout] {agent} took too long to respond."}
             except Exception as e:
                 self.emit("error", {"agent": agent, "error": str(e)})
                 return None
@@ -1145,12 +1180,22 @@ class AgentEngine:
                     if not peer_message:
                         peer_message = done_summary
 
-            failed = [r for r in cmd_results if re.search(r"Exit code: [^0]", r)]
+            # Check for REAL failures (non-zero exit code, not just warnings)
+            failed = [r for r in cmd_results if re.search(r"Exit code: (?!0\b)\d+", r)]
             if failed and not is_done:
+                # Max 3 retries for command failures (not 8)
+                if iteration >= 2:
+                    peer_message = (
+                        f"Commands had errors after {iteration + 1} attempts. "
+                        f"Results:\n" + "\n".join(cmd_results[-3:])
+                    )
+                    break
                 current_input = (
-                    f"Commands failed:\n\n"
+                    f"Some commands failed:\n\n"
                     + "\n\n".join(cmd_results)
-                    + f"\n\nWindows platform. Fix and include 'message' action."
+                    + f"\n\nPLATFORM: Windows 11. "
+                    f"Use 'if not exist DIR mkdir DIR' for mkdir. "
+                    f"Fix errors and include 'message' action."
                 )
                 peer_message = None
                 continue
@@ -1195,7 +1240,7 @@ class AgentEngine:
                 capture_output=True,
                 text=True,
                 cwd=self.workspace,
-                timeout=300,
+                timeout=90,
             )
             output = ""
             if r.stdout:
@@ -1216,9 +1261,9 @@ class AgentEngine:
         except subprocess.TimeoutExpired:
             self.emit(
                 "command_output",
-                {"agent": agent, "cmd": cmd, "output": "TIMEOUT (300s)", "exit_code": -1},
+                {"agent": agent, "cmd": cmd, "output": "TIMEOUT (90s)", "exit_code": -1},
             )
-            return f"Command: {cmd}\nERROR: timed out"
+            return f"Command: {cmd}\nERROR: timed out (90s)"
         except Exception as e:
             self.emit(
                 "command_output",
@@ -1254,7 +1299,7 @@ class AgentEngine:
                 capture_output=True,
                 text=True,
                 cwd=self.workspace,
-                timeout=300,
+                timeout=90,
             )
             output = ""
             if r.stdout:
@@ -1272,8 +1317,10 @@ class AgentEngine:
             )
             return f"Script: {name}\nExit code: {r.returncode}\n{output}"
         except subprocess.TimeoutExpired:
-            return f"Script: {name}\nERROR: timed out"
+            self.emit("script_output", {"agent": agent, "name": name, "output": "TIMEOUT (90s)", "exit_code": -1})
+            return f"Script: {name}\nERROR: timed out (90s)"
         except Exception as e:
+            self.emit("script_output", {"agent": agent, "name": name, "output": str(e), "exit_code": -1})
             return f"Script: {name}\nERROR: {e}"
 
     def _do_image(self, action, agent):
@@ -1578,9 +1625,9 @@ def _run_task(engine, task, task_id, sid):
         else:
             plan = {"steps": [{"step": 1, "title": "Build", "details": task}]}
 
-        # Build
+        # Build (blocking — _run_task is already in a background thread)
         engine.emit("status", {"agent": "system", "status": "building"})
-        engine.start_build(task, plan)
+        engine.start_build(task, plan, blocking=True)
     except Exception as e:
         engine.emit("error", {"agent": "system", "error": f"Task failed: {e}"})
         engine.emit("task_complete", {"type": "error"})
