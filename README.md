@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/synapse-banner.svg" alt="SYNAPSE Banner" width="100%"/>
+
 # ◈ SYNAPSE
 
 ### Neural Multi-Agent AI System

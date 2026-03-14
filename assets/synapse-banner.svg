@@ -1,0 +1,170 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0a1a;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#0d1033;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0a0a1a;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="neon1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00f0ff;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#7b2ff7;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="neon2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#7b2ff7;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#ff2d95;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="neon3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00f0ff;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#7b2ff7;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#ff2d95;stop-opacity:1" />
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowBig">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowText">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="1280" height="640" fill="url(#bg)" />
+  
+  <!-- Grid pattern -->
+  <g opacity="0.06" stroke="#00f0ff" stroke-width="0.5">
+    <line x1="0" y1="0" x2="1280" y2="640"/>
+    <line x1="128" y1="0" x2="1280" y2="576"/>
+    <line x1="256" y1="0" x2="1280" y2="512"/>
+    <line x1="384" y1="0" x2="1280" y2="448"/>
+    <line x1="0" y1="128" x2="1152" y2="640"/>
+    <line x1="0" y1="256" x2="1024" y2="640"/>
+    <line x1="1280" y1="0" x2="0" y2="640"/>
+    <line x1="1152" y1="0" x2="0" y2="576"/>
+    <line x1="1024" y1="0" x2="0" y2="512"/>
+    <line x1="896" y1="0" x2="0" y2="448"/>
+    <line x1="1280" y1="128" x2="128" y2="640"/>
+    <line x1="1280" y1="256" x2="256" y2="640"/>
+  </g>
+  
+  <!-- Background neural dots -->
+  <g opacity="0.15">
+    <circle cx="120" cy="100" r="2" fill="#00f0ff"/>
+    <circle cx="200" cy="520" r="2" fill="#7b2ff7"/>
+    <circle cx="340" cy="80" r="1.5" fill="#00f0ff"/>
+    <circle cx="450" cy="560" r="2" fill="#ff2d95"/>
+    <circle cx="900" cy="90" r="1.5" fill="#7b2ff7"/>
+    <circle cx="1050" cy="110" r="2" fill="#00f0ff"/>
+    <circle cx="1160" cy="530" r="2" fill="#ff2d95"/>
+    <circle cx="830" cy="560" r="1.5" fill="#7b2ff7"/>
+    <circle cx="150" cy="320" r="2" fill="#00f0ff"/>
+    <circle cx="1130" cy="300" r="2" fill="#00f0ff"/>
+    <line x1="120" y1="100" x2="340" y2="80" stroke="#00f0ff" stroke-width="0.5" opacity="0.3"/>
+    <line x1="900" y1="90" x2="1050" y2="110" stroke="#7b2ff7" stroke-width="0.5" opacity="0.3"/>
+    <line x1="200" y1="520" x2="450" y2="560" stroke="#7b2ff7" stroke-width="0.5" opacity="0.3"/>
+    <line x1="830" y1="560" x2="1160" y2="530" stroke="#ff2d95" stroke-width="0.5" opacity="0.3"/>
+  </g>
+
+  <!-- ===== BRAIN NEURAL NETWORK ICON ===== -->
+  <g transform="translate(340, 320)" filter="url(#glowBig)">
+    <!-- Left hemisphere -->
+    <path d="M-60,-65 C-95,-60 -115,-30 -115,5 C-115,30 -105,50 -85,65 C-70,76 -50,82 -30,82 C-15,82 -5,78 0,72" 
+          fill="none" stroke="url(#neon1)" stroke-width="2.5" opacity="0.9"/>
+    <!-- Right hemisphere -->
+    <path d="M60,-65 C95,-60 115,-30 115,5 C115,30 105,50 85,65 C70,76 50,82 30,82 C15,82 5,78 0,72" 
+          fill="none" stroke="url(#neon2)" stroke-width="2.5" opacity="0.9"/>
+    <!-- Top arc -->
+    <path d="M-60,-65 C-40,-80 40,-80 60,-65" fill="none" stroke="url(#neon3)" stroke-width="2.5" opacity="0.9"/>
+    <!-- Brain folds -->
+    <path d="M-80,-20 C-50,-30 -20,0 0,-15 C20,-30 50,-10 80,-20" fill="none" stroke="#00f0ff" stroke-width="1.2" opacity="0.4"/>
+    <path d="M-90,15 C-60,5 -30,30 0,18 C30,5 60,25 90,15" fill="none" stroke="#7b2ff7" stroke-width="1.2" opacity="0.4"/>
+    <path d="M-75,45 C-45,35 -20,55 0,45 C20,35 45,50 75,45" fill="none" stroke="#ff2d95" stroke-width="1.2" opacity="0.4"/>
+    
+    <!-- Neural nodes -->
+    <circle cx="-35" cy="-50" r="5" fill="#0a0a1a" stroke="#00f0ff" stroke-width="1.5" filter="url(#glow)"/>
+    <circle cx="0" cy="-55" r="4" fill="#0a0a1a" stroke="#7b2ff7" stroke-width="1.5" filter="url(#glow)"/>
+    <circle cx="35" cy="-50" r="5" fill="#0a0a1a" stroke="#00f0ff" stroke-width="1.5" filter="url(#glow)"/>
+    <circle cx="-60" cy="-15" r="5.5" fill="#0a0a1a" stroke="#7b2ff7" stroke-width="1.5" filter="url(#glow)"/>
+    <circle cx="-20" cy="-10" r="4.5" fill="#0a0a1a" stroke="#ff2d95" stroke-width="1.5" filter="url(#glow)"/>
+    <circle cx="20" cy="-10" r="4.5" fill="#0a0a1a" stroke="#ff2d95" stroke-width="1.5" filter="url(#glow)"/>
+    <circle cx="60" cy="-15" r="5.5" fill="#0a0a1a" stroke="#7b2ff7" stroke-width="1.5" filter="url(#glow)"/>
+    <!-- Core node -->
+    <circle cx="0" cy="20" r="8" fill="#0a0a1a" stroke="url(#neon3)" stroke-width="2" filter="url(#glowBig)"/>
+    <circle cx="0" cy="20" r="3" fill="#7b2ff7" opacity="0.6"/>
+    <circle cx="-45" cy="30" r="4.5" fill="#0a0a1a" stroke="#00f0ff" stroke-width="1.5" filter="url(#glow)"/>
+    <circle cx="-20" cy="50" r="4" fill="#0a0a1a" stroke="#7b2ff7" stroke-width="1.5" filter="url(#glow)"/>
+    <circle cx="20" cy="50" r="4" fill="#0a0a1a" stroke="#7b2ff7" stroke-width="1.5" filter="url(#glow)"/>
+    <circle cx="45" cy="30" r="4.5" fill="#0a0a1a" stroke="#00f0ff" stroke-width="1.5" filter="url(#glow)"/>
+    
+    <!-- Neural connections -->
+    <g stroke-width="1" opacity="0.5">
+      <line x1="-35" y1="-50" x2="-60" y2="-15" stroke="#00f0ff"/>
+      <line x1="-35" y1="-50" x2="-20" y2="-10" stroke="#00f0ff"/>
+      <line x1="0" y1="-55" x2="-20" y2="-10" stroke="#7b2ff7"/>
+      <line x1="0" y1="-55" x2="20" y2="-10" stroke="#7b2ff7"/>
+      <line x1="35" y1="-50" x2="20" y2="-10" stroke="#00f0ff"/>
+      <line x1="35" y1="-50" x2="60" y2="-15" stroke="#00f0ff"/>
+      <line x1="-60" y1="-15" x2="0" y2="20" stroke="#7b2ff7"/>
+      <line x1="-20" y1="-10" x2="0" y2="20" stroke="#ff2d95"/>
+      <line x1="20" y1="-10" x2="0" y2="20" stroke="#ff2d95"/>
+      <line x1="60" y1="-15" x2="0" y2="20" stroke="#7b2ff7"/>
+      <line x1="0" y1="20" x2="-45" y2="30" stroke="#00f0ff"/>
+      <line x1="0" y1="20" x2="-20" y2="50" stroke="#7b2ff7"/>
+      <line x1="0" y1="20" x2="20" y2="50" stroke="#7b2ff7"/>
+      <line x1="0" y1="20" x2="45" y2="30" stroke="#00f0ff"/>
+      <line x1="-60" y1="-15" x2="-45" y2="30" stroke="#00f0ff" opacity="0.3"/>
+      <line x1="60" y1="-15" x2="45" y2="30" stroke="#00f0ff" opacity="0.3"/>
+    </g>
+    
+    <!-- Pulse rings -->
+    <circle cx="0" cy="20" r="20" fill="none" stroke="#7b2ff7" stroke-width="0.5" opacity="0.3"/>
+    <circle cx="0" cy="20" r="35" fill="none" stroke="#00f0ff" stroke-width="0.3" opacity="0.15"/>
+    
+    <!-- External sparks -->
+    <g opacity="0.6" filter="url(#glow)">
+      <circle cx="-130" cy="-20" r="3" fill="#00f0ff"/>
+      <line x1="-130" y1="-20" x2="-115" y2="5" stroke="#00f0ff" stroke-width="0.8" opacity="0.4"/>
+      <circle cx="130" cy="-20" r="3" fill="#ff2d95"/>
+      <line x1="130" y1="-20" x2="115" y2="5" stroke="#ff2d95" stroke-width="0.8" opacity="0.4"/>
+      <circle cx="-100" cy="-80" r="2.5" fill="#7b2ff7"/>
+      <line x1="-100" y1="-80" x2="-60" y2="-65" stroke="#7b2ff7" stroke-width="0.8" opacity="0.4"/>
+      <circle cx="100" cy="-80" r="2.5" fill="#7b2ff7"/>
+      <line x1="100" y1="-80" x2="60" y2="-65" stroke="#7b2ff7" stroke-width="0.8" opacity="0.4"/>
+      <circle cx="0" cy="110" r="3" fill="#00f0ff"/>
+      <line x1="0" y1="110" x2="0" y2="82" stroke="#00f0ff" stroke-width="0.8" opacity="0.4"/>
+    </g>
+  </g>
+  
+  <!-- ===== TEXT ===== -->
+  <g filter="url(#glowText)">
+    <text x="640" y="295" text-anchor="middle" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" 
+          font-size="82" font-weight="700" letter-spacing="16" fill="url(#neon3)">SYNAPSE</text>
+  </g>
+  <text x="640" y="345" text-anchor="middle" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" 
+        font-size="18" font-weight="300" letter-spacing="8" fill="#8888aa" opacity="0.8">NEURAL MULTI-AGENT AI SYSTEM</text>
+  <line x1="520" y1="365" x2="760" y2="365" stroke="url(#neon3)" stroke-width="1" opacity="0.4"/>
+  
+  <!-- Feature pills -->
+  <g font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" font-size="11" font-weight="400">
+    <g transform="translate(475,395)">
+      <rect width="90" height="24" rx="12" fill="none" stroke="#00f0ff" stroke-width="0.8" opacity="0.5"/>
+      <text x="45" y="16" text-anchor="middle" fill="#00f0ff" opacity="0.7">SELF-EVOLVING</text>
+    </g>
+    <g transform="translate(580,395)">
+      <rect width="120" height="24" rx="12" fill="none" stroke="#7b2ff7" stroke-width="0.8" opacity="0.5"/>
+      <text x="60" y="16" text-anchor="middle" fill="#7b2ff7" opacity="0.7">MULTI-PROVIDER</text>
+    </g>
+    <g transform="translate(715,395)">
+      <rect width="90" height="24" rx="12" fill="none" stroke="#ff2d95" stroke-width="0.8" opacity="0.5"/>
+      <text x="45" y="16" text-anchor="middle" fill="#ff2d95" opacity="0.7">RAG MEMORY</text>
+    </g>
+  </g>
+  
+  <!-- Bottom branding -->
+  <text x="640" y="580" text-anchor="middle" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" 
+        font-size="11" font-weight="300" letter-spacing="3" fill="#555577" opacity="0.5">AXONYX QUANTUM PRIVATE LIMITED</text>
+</svg>
