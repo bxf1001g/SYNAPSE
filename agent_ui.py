@@ -67,6 +67,22 @@ try:
 except ImportError:
     _Github = None
 
+# Memory (RAG) via ChromaDB
+_chromadb_available = False
+try:
+    import chromadb
+    _chromadb_available = True
+except ImportError:
+    chromadb = None
+
+# Docker SDK
+_docker_available = False
+try:
+    import docker as _docker_sdk
+    _docker_available = True
+except ImportError:
+    _docker_sdk = None
+
 
 # ── Neural Model Configuration ──────────────────────────────────
 
@@ -186,6 +202,147 @@ def save_config(cfg, base_dir="."):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
 
+
+# ── Persistent Memory (RAG) ────────────────────────────────────
+
+class SynapseMemory:
+    """ChromaDB-backed long-term memory for agents — remembers across sessions."""
+
+    def __init__(self, workspace):
+        self.mem_dir = os.path.join(workspace, ".synapse_memory")
+        os.makedirs(self.mem_dir, exist_ok=True)
+        self._collection = None
+        self._client = None
+
+    def _get_collection(self):
+        if self._collection is not None:
+            return self._collection
+        if not _chromadb_available:
+            return None
+        try:
+            self._client = chromadb.PersistentClient(path=self.mem_dir)
+            self._collection = self._client.get_or_create_collection(
+                name="synapse_memory",
+                metadata={"hnsw:space": "cosine"},
+            )
+            return self._collection
+        except Exception:
+            return None
+
+    def store(self, task, summary, agent_roles, files_created, tags=None):
+        """Store a completed task into long-term memory."""
+        col = self._get_collection()
+        if col is None:
+            return
+        doc_id = f"task-{int(time.time() * 1000)}"
+        doc_text = (
+            f"TASK: {task}\n"
+            f"AGENTS: {', '.join(agent_roles)}\n"
+            f"FILES: {', '.join(files_created[:20])}\n"
+            f"SUMMARY: {summary}"
+        )
+        metadata = {
+            "timestamp": datetime.now().isoformat(),
+            "agent_roles": ",".join(agent_roles),
+            "file_count": str(len(files_created)),
+        }
+        if tags:
+            metadata["tags"] = ",".join(tags)
+        try:
+            col.add(ids=[doc_id], documents=[doc_text], metadatas=[metadata])
+        except Exception:
+            pass
+
+    def recall(self, query, n=5):
+        """Recall relevant memories via semantic search."""
+        col = self._get_collection()
+        if col is None:
+            return []
+        try:
+            results = col.query(query_texts=[query], n_results=n)
+            memories = []
+            for i, doc in enumerate(results.get("documents", [[]])[0]):
+                meta = results.get("metadatas", [[]])[0][i] if results.get("metadatas") else {}
+                memories.append({"text": doc, "metadata": meta})
+            return memories
+        except Exception:
+            return []
+
+    def count(self):
+        col = self._get_collection()
+        return col.count() if col else 0
+
+
+# ── Dynamic Agent Roles ─────────────────────────────────────────
+
+AGENT_ROLES = {
+    "architect": {
+        "label": "🏗 Architect",
+        "cortex": "reason",
+        "color": "#a78bfa",
+        "desc": "Plans architecture, reviews code, coordinates agents",
+    },
+    "developer": {
+        "label": "💻 Developer",
+        "cortex": "create",
+        "color": "#38bdf8",
+        "desc": "Implements code, creates files, runs builds",
+    },
+    "researcher": {
+        "label": "🔍 Researcher",
+        "cortex": "reason",
+        "color": "#34d399",
+        "desc": "Browses web, reads docs, gathers information",
+    },
+    "tester": {
+        "label": "🧪 Tester",
+        "cortex": "create",
+        "color": "#fbbf24",
+        "desc": "Writes tests, runs QA, validates functionality",
+    },
+    "security": {
+        "label": "🛡 Security",
+        "cortex": "reason",
+        "color": "#f87171",
+        "desc": "Reviews for vulnerabilities, checks deps, hardens code",
+    },
+    "devops": {
+        "label": "⚙ DevOps",
+        "cortex": "create",
+        "color": "#fb923c",
+        "desc": "Docker, CI/CD, deployment, infrastructure",
+    },
+}
+
+SPECIALIST_PROMPT = """\
+You are the {role_upper} agent in SYNAPSE — a self-evolving multi-agent AI system.
+Your specialty: {specialty}
+
+WORKSPACE: {workspace}
+PLATFORM: Windows 11
+
+YOU CAN: Run commands, create files, create scripts, browse web, use GitHub API, generate images.
+
+RESPOND WITH ONLY JSON:
+{{
+  "thinking": "private reasoning",
+  "actions": [
+    {{"type": "command", "cmd": "..."}},
+    {{"type": "file", "path": "path", "content": "full content"}},
+    {{"type": "script", "name": "x.py", "lang": "python", "content": "..."}},
+    {{"type": "browse", "url": "https://example.com"}},
+    {{"type": "github", "operation": "...", ...}},
+    {{"type": "message", "content": "report to team"}},
+    {{"type": "done", "summary": "completed"}}
+  ]
+}}
+
+RULES:
+1. Focus on your specialty — {specialty}
+2. Be thorough and proactive
+3. ONE "message" action per response
+4. Include FULL file contents — no placeholders
+"""
 
 # ── Unified Chat Interface ──────────────────────────────────────
 
@@ -761,6 +918,7 @@ class AgentEngine:
         self.max_local_iters = 8
         self.files_created = []
         self.temp_scripts = []
+        self.active_agents = []  # Dynamic agent tracking
 
         self.plan_event = threading.Event()
         self.plan_approved = False
@@ -773,6 +931,20 @@ class AgentEngine:
         # Neural cortex — multi-model, multi-provider brain
         self.cortex = NeuralCortex(config)
         self.active_cortex = "create"
+
+        # Persistent memory (RAG)
+        self.memory = SynapseMemory(self.workspace)
+
+        # Docker sandbox detection
+        self._docker_client = None
+        self._docker_available = False
+        if _docker_available:
+            try:
+                self._docker_client = _docker_sdk.from_env()
+                self._docker_client.ping()
+                self._docker_available = True
+            except Exception:
+                pass
 
         # Subconscious thread
         self._subconscious_running = False
@@ -887,9 +1059,94 @@ class AgentEngine:
         except Exception:
             return "build"
 
+    def _recall_memory(self, task):
+        """Recall relevant past experiences for context injection."""
+        memories = self.memory.recall(task, n=3)
+        if not memories:
+            return ""
+        lines = ["PAST EXPERIENCE (from long-term memory):"]
+        for m in memories:
+            lines.append(f"  • {m['text'][:300]}")
+        return "\n".join(lines) + "\n\n"
+
+    def _select_agents(self, task):
+        """Dynamically select which agents to spawn based on task analysis."""
+        lower = task.lower()
+        agents = ["architect", "developer"]  # Always present
+
+        # Detect if specialist agents are needed
+        if any(w in lower for w in ("research", "find out", "what is the latest",
+                                     "compare", "investigate", "survey")):
+            agents.append("researcher")
+        if any(w in lower for w in ("test", "qa", "validate", "verify", "coverage",
+                                     "unittest", "pytest", "selenium")):
+            agents.append("tester")
+        if any(w in lower for w in ("security", "vulnerability", "audit", "owasp",
+                                     "xss", "sql injection", "auth", "encrypt")):
+            agents.append("security")
+        if any(w in lower for w in ("docker", "deploy", "ci/cd", "kubernetes",
+                                     "pipeline", "infrastructure", "devops")):
+            agents.append("devops")
+
+        # For complex tasks, use AI to decide
+        if len(task.split()) > 20 and len(agents) == 2:
+            try:
+                result = self.cortex.quick_generate(
+                    "fast",
+                    f"Which specialist agents are needed? Options: researcher, tester, security, devops\n"
+                    f"Task: {task}\n"
+                    f"Respond with ONLY a comma-separated list (or 'none'):",
+                ).strip().lower()
+                for role in ("researcher", "tester", "security", "devops"):
+                    if role in result and role not in agents:
+                        agents.append(role)
+            except Exception:
+                pass
+
+        self.active_agents = agents
+        return agents
+
+    def _store_memory(self, task, summary):
+        """Store completed task into long-term memory."""
+        self.memory.store(
+            task=task,
+            summary=summary,
+            agent_roles=self.active_agents,
+            files_created=self.files_created,
+        )
+
+    # ── Docker Sandboxed Execution ───────────────────────────
+
+    def _run_in_docker(self, cmd, timeout=90):
+        """Run command in an ephemeral Docker container."""
+        if not self._docker_available:
+            return None  # Fallback to local
+        try:
+            container = self._docker_client.containers.run(
+                "python:3.12-slim",
+                cmd,
+                volumes={self.workspace: {"bind": "/workspace", "mode": "rw"}},
+                working_dir="/workspace",
+                detach=True,
+                mem_limit="512m",
+                cpu_period=100000,
+                cpu_quota=50000,
+                network_mode="bridge",
+            )
+            result = container.wait(timeout=timeout)
+            logs = container.logs().decode("utf-8", errors="replace")
+            exit_code = result.get("StatusCode", -1)
+            container.remove(force=True)
+            return f"{logs}\n\nExit code: {exit_code}"
+        except Exception as e:
+            return None  # Fallback to local
+
     # ── Question Answering (full scripting power) ────────────
 
     def answer_question(self, question):
+        # Recall relevant memories
+        memory_context = self._recall_memory(question)
+
         files_info = []
         try:
             for item in os.listdir(self.workspace):
@@ -926,6 +1183,7 @@ class AgentEngine:
         )
 
         prompt = (
+            f"{memory_context}"
             f"Workspace:\n{ws_listing}\n\nQuestion: {question}\n\n"
             f"Answer using commands/scripts if needed."
         )
@@ -1008,11 +1266,26 @@ class AgentEngine:
         self.turn = 0
         self.files_created = []
         self.temp_scripts = []
+        self._build_task = task  # Store for memory
 
         with open(self.log_path, "w", encoding="utf-8") as f:
             f.write(f"# Conversation Log — {datetime.now()}\n\n")
 
+        # Select dynamic agents
+        agents = self._select_agents(task)
+        self.emit("agents_spawned", {
+            "agents": [
+                {"id": a, **AGENT_ROLES.get(a, {"label": a, "color": "#888", "desc": a})}
+                for a in agents
+            ]
+        })
+
+        # Recall past experience
+        memory_context = self._recall_memory(task)
+
         arch_prompt = ARCHITECT_PROMPT.format(workspace=self.workspace)
+        if memory_context:
+            arch_prompt = arch_prompt + f"\n\n{memory_context}"
         dev_prompt = DEVELOPER_PROMPT.format(workspace=self.workspace)
 
         self.emit("cortex_active", {
@@ -1035,11 +1308,31 @@ class AgentEngine:
 
         self.dev_chat = self.cortex.create_chat("create", dev_prompt)
 
+        # Spawn specialist agent chats
+        self._specialist_chats = {}
+        for agent_id in agents:
+            if agent_id in ("architect", "developer"):
+                continue
+            role_info = AGENT_ROLES.get(agent_id, {})
+            prompt = SPECIALIST_PROMPT.format(
+                role_upper=agent_id.upper(),
+                specialty=role_info.get("desc", agent_id),
+                workspace=self.workspace,
+            )
+            cortex_id = role_info.get("cortex", "create")
+            self._specialist_chats[agent_id] = self.cortex.create_chat(cortex_id, prompt)
+            self.emit("cortex_active", {
+                "id": cortex_id,
+                "label": role_info.get("label", agent_id),
+                "desc": f"{agent_id.title()} ready...",
+                "model": CORTEX_MODELS[cortex_id]["model"],
+                "color": role_info.get("color", "#888"),
+            })
+
         # Start subconscious monitoring
         self.start_subconscious()
 
         if blocking:
-            # Run build synchronously (when already in a background thread)
             self._run_build(task, plan)
         else:
             thread = threading.Thread(
@@ -1049,11 +1342,23 @@ class AgentEngine:
 
     def _run_build(self, task, plan):
         plan_text = json.dumps(plan, indent=2)
+
+        # Include specialist agent list in first prompt
+        specialist_list = ", ".join(
+            a for a in self.active_agents if a not in ("architect", "developer")
+        )
+        specialist_note = ""
+        if specialist_list:
+            specialist_note = (
+                f"\n\nSPECIALIST AGENTS AVAILABLE: {specialist_list}\n"
+                f"You can delegate tasks to them. They will report back."
+            )
+
         first_prompt = (
             f"Approved plan:\n\n{plan_text}\n\n"
             f"Send comprehensive instructions to Developer. "
             f"Combine steps. Include COMPLETE file contents. "
-            f"Aim for 2-4 total turns."
+            f"Aim for 2-4 total turns.{specialist_note}"
         )
 
         try:
@@ -1064,12 +1369,16 @@ class AgentEngine:
                     break
 
                 if arch_msg.get("type") == "done":
+                    summary = arch_msg.get("body", "Complete")
                     self._cleanup()
+                    # Store to long-term memory
+                    self._store_memory(task, summary)
                     self.emit(
                         "done",
                         {
-                            "summary": arch_msg.get("body", "Complete"),
+                            "summary": summary,
                             "files": sorted(set(self.files_created)),
+                            "memory_count": self.memory.count(),
                         },
                     )
                     break
@@ -1089,13 +1398,23 @@ class AgentEngine:
                     + arch_msg.get("body", "")
                 )
 
+                # Run specialist agents in parallel if available
+                specialist_results = {}
+                if self._specialist_chats:
+                    self._run_specialists(arch_msg.get("body", ""), specialist_results)
+
                 # Developer processes
-                dev_prompt = (
+                dev_input = (
                     f"Architect instructs:\n\n{arch_msg['body']}\n\n"
                     f"Implement: create files, run commands, test, report."
                 )
+                if specialist_results:
+                    dev_input += "\n\nSPECIALIST REPORTS:\n"
+                    for role, report in specialist_results.items():
+                        dev_input += f"\n[{role.upper()}]: {report[:500]}\n"
+
                 dev_msg = self._process_turn(
-                    "developer", self.dev_chat, dev_prompt
+                    "developer", self.dev_chat, dev_input
                 )
 
                 if dev_msg is None:
@@ -1143,6 +1462,34 @@ class AgentEngine:
             self.stop_subconscious()
             self.emit("build_complete", {})
 
+    def _run_specialists(self, instructions, results_dict):
+        """Run specialist agents in parallel threads."""
+        def _run_one(agent_id, chat):
+            try:
+                prompt = (
+                    f"The Architect has issued instructions. "
+                    f"Based on your specialty, contribute:\n\n{instructions[:2000]}"
+                )
+                msg = self._process_turn(agent_id, chat, prompt)
+                if msg and msg.get("body"):
+                    results_dict[agent_id] = msg["body"]
+                    self.emit("agent_message", {
+                        "from": agent_id,
+                        "to": "architect",
+                        "content": msg["body"],
+                        "turn": self.turn,
+                    })
+            except Exception as e:
+                results_dict[agent_id] = f"(error: {e})"
+
+        threads = []
+        for agent_id, chat in self._specialist_chats.items():
+            t = threading.Thread(target=_run_one, args=(agent_id, chat), daemon=True)
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join(timeout=120)
+
     def _process_turn(self, agent, chat, input_text):
         """One turn: AI call → execute actions → iterate if needed."""
         self.turn += 1
@@ -1152,14 +1499,15 @@ class AgentEngine:
         done_summary = ""
 
         # Emit which cortex is driving this agent
-        cortex_id = "reason" if agent == "architect" else "create"
+        role_info = AGENT_ROLES.get(agent, {})
+        cortex_id = role_info.get("cortex", "reason" if agent == "architect" else "create")
         cortex_info = CORTEX_MODELS[cortex_id]
         self.emit("cortex_active", {
             "id": cortex_id,
-            "label": cortex_info["label"],
+            "label": role_info.get("label", cortex_info["label"]),
             "desc": f"{agent.title()} thinking...",
             "model": cortex_info["model"],
-            "color": cortex_info["color"],
+            "color": role_info.get("color", cortex_info["color"]),
         })
 
         for iteration in range(self.max_local_iters):
@@ -1285,15 +1633,26 @@ class AgentEngine:
         cmd = action.get("cmd", "")
         if not cmd:
             return None
-        self.emit("command_start", {"agent": agent, "cmd": cmd})
+        sandbox = action.get("sandbox", False)
+        self.emit("command_start", {"agent": agent, "cmd": cmd, "sandboxed": sandbox or self._docker_available})
+
+        # Try Docker sandbox for untrusted commands
+        if (sandbox or self._docker_available) and not cmd.startswith(("pip ", "npm ", "cd ")):
+            docker_result = self._run_in_docker(cmd)
+            if docker_result is not None:
+                self.emit("command_output", {
+                    "agent": agent, "cmd": cmd,
+                    "output": docker_result.strip(), "exit_code": 0,
+                    "sandboxed": True,
+                })
+                self._log(f"[CMD-DOCKER] $ {cmd}\n{docker_result}")
+                return f"$ {cmd}\n{docker_result}"
+
+        # Local execution fallback
         try:
             r = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                cwd=self.workspace,
-                timeout=90,
+                cmd, shell=True, capture_output=True, text=True,
+                cwd=self.workspace, timeout=90,
             )
             output = ""
             if r.stdout:
@@ -2088,6 +2447,220 @@ def post_settings():
 @app.route("/api/models")
 def get_models():
     return json.dumps(PROVIDER_MODELS)
+
+
+# ── Webhook / Event-Driven API ──────────────────────────────────
+
+_webhook_secret = os.environ.get("WEBHOOK_SECRET", "")
+_cron_jobs = []  # List of {"schedule": "*/5 * * * *", "task": "...", "enabled": True}
+_cron_thread = None
+
+
+@app.route("/api/webhook", methods=["POST"])
+def webhook_handler():
+    """Accept external triggers: GitHub webhooks, Slack, custom events."""
+    data = request.get_json(silent=True) or {}
+
+    # Verify webhook secret if set
+    if _webhook_secret:
+        sig = request.headers.get("X-Hub-Signature-256", "")
+        if _webhook_secret not in sig and data.get("secret") != _webhook_secret:
+            return json.dumps({"error": "unauthorized"}), 401
+
+    source = data.get("source", "unknown")
+    event_type = request.headers.get("X-GitHub-Event", data.get("event", "custom"))
+
+    # GitHub webhook: new issue → auto-task
+    if event_type == "issues" and data.get("action") == "opened":
+        issue = data.get("issue", {})
+        task = f"GitHub Issue #{issue.get('number')}: {issue.get('title', '')}\n{issue.get('body', '')[:500]}"
+        _spawn_webhook_task(task, f"github-issue-{issue.get('number')}")
+        return json.dumps({"status": "task_created", "source": "github_issue"})
+
+    # GitHub webhook: PR opened → auto-review
+    if event_type == "pull_request" and data.get("action") == "opened":
+        pr = data.get("pull_request", {})
+        task = (
+            f"Review PR #{pr.get('number')}: {pr.get('title', '')}\n"
+            f"Repo: {pr.get('base', {}).get('repo', {}).get('full_name', '')}\n"
+            f"Changes: {pr.get('body', '')[:500]}\n"
+            f"Review code quality, security, and suggest improvements."
+        )
+        _spawn_webhook_task(task, f"github-pr-{pr.get('number')}")
+        return json.dumps({"status": "review_created", "source": "github_pr"})
+
+    # Generic webhook: custom task
+    if "task" in data:
+        _spawn_webhook_task(data["task"], f"webhook-{int(time.time())}")
+        return json.dumps({"status": "task_created", "source": source})
+
+    # Slack integration
+    if data.get("type") == "event_callback":
+        event = data.get("event", {})
+        if event.get("type") == "message" and not event.get("bot_id"):
+            text = event.get("text", "")
+            if text.startswith("@synapse") or text.startswith("!synapse"):
+                task = text.replace("@synapse", "").replace("!synapse", "").strip()
+                _spawn_webhook_task(task, f"slack-{int(time.time())}")
+                return json.dumps({"status": "task_created", "source": "slack"})
+
+    return json.dumps({"status": "received", "event": event_type})
+
+
+@app.route("/api/webhook/tasks", methods=["GET"])
+def list_webhook_tasks():
+    """List recently triggered webhook tasks."""
+    return json.dumps({"active_tasks": len(task_pools), "cron_jobs": len(_cron_jobs)})
+
+
+@app.route("/api/cron", methods=["GET", "POST", "DELETE"])
+def cron_handler():
+    """Manage scheduled/cron tasks."""
+    if request.method == "GET":
+        return json.dumps({"jobs": _cron_jobs})
+
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        job = {
+            "id": f"cron-{int(time.time())}",
+            "schedule": data.get("schedule", "0 */6 * * *"),
+            "task": data.get("task", ""),
+            "enabled": data.get("enabled", True),
+            "last_run": None,
+        }
+        _cron_jobs.append(job)
+        _ensure_cron_thread()
+        return json.dumps({"status": "created", "job": job})
+
+    if request.method == "DELETE":
+        data = request.get_json(silent=True) or {}
+        job_id = data.get("id", "")
+        _cron_jobs[:] = [j for j in _cron_jobs if j["id"] != job_id]
+        return json.dumps({"status": "deleted"})
+
+
+def _spawn_webhook_task(task_text, task_id):
+    """Spawn a task from webhook (no browser session needed)."""
+    workspace = app.config.get("WORKSPACE", "./workspace")
+    config = app.config.get("SYNAPSE_CONFIG", load_config("."))
+    engine = AgentEngine(workspace, config)
+    engine.task_id = task_id
+    engine.set_socketio(socketio, None)
+
+    def run():
+        try:
+            task_type = engine.classify_task(task_text)
+            if task_type == "question":
+                engine.answer_question(task_text)
+            else:
+                plan = engine.create_plan(task_text)
+                if not plan:
+                    plan = {"steps": [{"step": 1, "title": "Build", "details": task_text}]}
+                engine.start_build(task_text, plan, blocking=True)
+        except Exception:
+            pass
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _ensure_cron_thread():
+    """Start the cron scheduler thread if not running."""
+    global _cron_thread
+    if _cron_thread and _cron_thread.is_alive():
+        return
+
+    def _cron_loop():
+        while True:
+            now = datetime.now()
+            for job in _cron_jobs:
+                if not job.get("enabled"):
+                    continue
+                if _cron_should_run(job, now):
+                    job["last_run"] = now.isoformat()
+                    _spawn_webhook_task(job["task"], job["id"])
+            time.sleep(60)
+
+    _cron_thread = threading.Thread(target=_cron_loop, daemon=True)
+    _cron_thread.start()
+
+
+def _cron_should_run(job, now):
+    """Simple cron check — runs at matching hour/minute intervals."""
+    schedule = job.get("schedule", "")
+    last_run = job.get("last_run")
+    if last_run:
+        last = datetime.fromisoformat(last_run)
+        if (now - last).total_seconds() < 55:
+            return False
+    parts = schedule.split()
+    if len(parts) < 5:
+        return False
+    minute, hour = parts[0], parts[1]
+    if minute != "*" and minute.startswith("*/"):
+        interval = int(minute[2:])
+        if now.minute % interval != 0:
+            return False
+    elif minute != "*" and now.minute != int(minute):
+        return False
+    if hour != "*" and hour.startswith("*/"):
+        interval = int(hour[2:])
+        if now.hour % interval != 0:
+            return False
+    elif hour != "*" and now.hour != int(hour):
+        return False
+    return True
+
+
+# ── Vision / Image Upload API ───────────────────────────────────
+
+@app.route("/api/vision", methods=["POST"])
+def vision_analyze():
+    """Analyze uploaded image using Gemini Vision."""
+    if "image" not in request.files:
+        return json.dumps({"error": "no image provided"}), 400
+
+    file = request.files["image"]
+    prompt = request.form.get("prompt", "Describe this image in detail.")
+    image_data = file.read()
+    b64 = base64.b64encode(image_data).decode("utf-8")
+    mime = file.content_type or "image/png"
+
+    config = app.config.get("SYNAPSE_CONFIG", load_config("."))
+    cortex = NeuralCortex(config)
+
+    try:
+        result = cortex.quick_generate(
+            "visual",
+            prompt,
+            system_prompt="You are a vision AI. Analyze images precisely.",
+        )
+        return json.dumps({"analysis": result, "size": len(image_data)})
+    except Exception as e:
+        return json.dumps({"error": str(e)}), 500
+
+
+@app.route("/api/memory", methods=["GET"])
+def memory_stats():
+    """Get memory statistics."""
+    workspace = app.config.get("WORKSPACE", "./workspace")
+    mem = SynapseMemory(workspace)
+    return json.dumps({
+        "count": mem.count(),
+        "available": _chromadb_available,
+    })
+
+
+@app.route("/api/memory/search", methods=["POST"])
+def memory_search():
+    """Search long-term memory."""
+    data = request.get_json(silent=True) or {}
+    query = data.get("query", "")
+    if not query:
+        return json.dumps({"results": []})
+    workspace = app.config.get("WORKSPACE", "./workspace")
+    mem = SynapseMemory(workspace)
+    results = mem.recall(query, n=data.get("limit", 5))
+    return json.dumps({"results": results})
 
 
 # ── Module-level init for gunicorn (Cloud Run) ──────────────────

@@ -892,6 +892,42 @@
             font-size: 0.7rem; color: var(--text-dim); margin-top: 4px;
             font-style: italic;
         }
+        /* Voice & Upload controls */
+        .btn-voice {
+            background: transparent; border: 1px solid var(--purple);
+            color: var(--purple); width: 36px; height: 36px; border-radius: 8px;
+            cursor: pointer; font-size: 1.1rem; transition: all 0.3s ease;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .btn-voice:hover { background: rgba(168,85,247,0.2); }
+        .btn-voice.recording { background: rgba(239,68,68,0.3); border-color: #ef4444;
+            color: #ef4444; animation: pulse 0.8s ease-in-out infinite; }
+        .btn-upload {
+            background: transparent; border: 1px solid var(--cyan);
+            color: var(--cyan); width: 36px; height: 36px; border-radius: 8px;
+            cursor: pointer; font-size: 1rem; transition: all 0.3s ease;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .btn-upload:hover { background: rgba(56,189,248,0.2); }
+        .image-preview { max-height: 60px; border-radius: 6px; margin: 0 4px;
+            border: 1px solid var(--border-dim); }
+        /* Agent badges */
+        .agent-badge {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 2px 8px; border-radius: 12px; font-size: 0.7rem;
+            border: 1px solid; margin: 2px;
+        }
+        /* Memory indicator */
+        .memory-badge {
+            font-size: 0.65rem; padding: 1px 6px; border-radius: 8px;
+            background: rgba(52,211,153,0.15); border: 1px solid rgba(52,211,153,0.3);
+            color: #34d399; cursor: pointer;
+        }
+        .memory-badge:hover { background: rgba(52,211,153,0.3); }
+        /* TTS toggle */
+        .btn-tts { background: transparent; border: none; cursor: pointer;
+            font-size: 0.9rem; opacity: 0.5; transition: opacity 0.3s; }
+        .btn-tts.active { opacity: 1; }
     </style>
 </head>
 <body>
@@ -908,17 +944,23 @@
             <span id="cortexLabel" style="font-size:0.75rem;padding:2px 8px;border-radius:6px;background:rgba(168,85,247,0.15);border:1px solid rgba(168,85,247,0.3);transition:all 0.5s ease">🧠 Neural Ready</span>
             <span id="brainPulse" style="width:8px;height:8px;border-radius:50%;background:var(--purple);display:inline-block;animation:pulse 2s ease-in-out infinite"></span>
             <button class="btn-settings" id="btnSettings" title="Settings">⚙</button>
+            <span class="memory-badge" id="memoryBadge" title="Long-term memories">🧬 0 memories</span>
             <span style="opacity:0.4">{{ workspace }}</span>
         </div>
     </div>
 
     <!-- ── Task Input ────────────────────────────── -->
     <form class="task-bar" id="taskForm">
-        <div class="task-input-wrap">
+        <div class="task-input-wrap" style="display:flex;align-items:center;gap:6px;">
+            <button type="button" class="btn-voice" id="btnVoice" title="Voice input (hold to speak)">🎤</button>
+            <button type="button" class="btn-upload" id="btnUpload" title="Upload image for analysis">📷</button>
+            <input type="file" id="imageUpload" accept="image/*" style="display:none">
+            <img id="imagePreview" class="image-preview" style="display:none">
             <input type="text" class="task-input" id="taskInput"
                    placeholder="Submit tasks in parallel — each runs on its own thread..."
                    autocomplete="off" autofocus>
         </div>
+        <button type="button" class="btn-tts" id="btnTTS" title="Toggle text-to-speech">🔊</button>
         <button type="submit" class="btn-execute" id="btnExecute">▶ EXECUTE</button>
     </form>
 
@@ -1186,12 +1228,7 @@
         socket.on('script_start', d => { appendTo(getAB(d.agent,d),'<div class="t-line t-system">\ud83d\udd27 Script: '+esc(d.name)+' ('+esc(d.lang)+')</div>'); });
         socket.on('script_output', d => { appendTo(getAB(d.agent,d),'<div class="t-line '+(d.exit_code===0?'t-output':'t-error')+'">'+esc(d.output).replace(/\n/g,'<br>')+'</div>'); });
 
-        socket.on('agent_message', d => {
-            const p=getTP(d), arrow=d.from==='architect'?'\u2192':'\u2190';
-            appendTo(p.commsBody,'<div class="msg from-'+d.from+'"><div class="msg-header">Turn '+d.turn+' \u2502 \ud83c\udfd7 Architect '+arrow+' \ud83d\udc77 Developer</div><div class="msg-content">'+esc(d.content)+'</div></div>');
-        });
-
-        socket.on('answer', d => { appendTo(getTP(d).commsBody,'<div class="msg from-system"><div class="msg-content">'+esc(d.text).replace(/\n/g,'<br>')+'</div></div>'); });
+        // agent_message, answer, done handlers are defined below with TTS + specialist support
 
         socket.on('plan', d => {
             planModal.dataset.taskId = d.task_id||'';
@@ -1205,10 +1242,6 @@
         $('btnApprove').addEventListener('click',()=>{socket.emit('approve_plan',{approved:true,task_id:planModal.dataset.taskId});planModal.classList.add('hidden');});
         $('btnReject').addEventListener('click',()=>{socket.emit('approve_plan',{approved:false,task_id:planModal.dataset.taskId});planModal.classList.add('hidden');});
 
-        socket.on('done', d => {
-            const p=getTP(d), files=(d.files||[]).map(f=>'\ud83d\udcc4 '+esc(f)).join('<br>');
-            appendTo(p.commsBody,'<div class="done-banner"><h3>\ud83c\udf89 Project Complete</h3><p>'+esc(d.summary)+'</p>'+(files?'<div class="files" style="margin-top:8px">'+files+'</div>':'')+'</div>');
-        });
         socket.on('self_modify', d => {
             const p=getTP(d), fl=(d.files||[]).map(f=>'\u26a1 '+esc(f)).join('<br>');
             appendTo(p.commsBody,'<div class="evolve-banner"><h3>\ud83e\uddec SYSTEM EVOLVING\u2026</h3><div class="reason">'+esc(d.reason||'Self-modification')+'</div><div class="files">'+fl+'</div></div>');
@@ -1381,6 +1414,164 @@
                 setStatus('settings saved','');
                 setTimeout(() => setStatus('idle',''), 2000);
             });
+        });
+
+        // ── Voice Input (Web Speech API) ────────────
+        const btnVoice = $('btnVoice');
+        let recognition = null;
+        let isRecording = false;
+        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SpeechRecognition();
+            recognition.continuous = false;
+            recognition.interimResults = true;
+            recognition.lang = 'en-US';
+            recognition.onresult = (e) => {
+                let transcript = '';
+                for (let i = e.resultIndex; i < e.results.length; i++) {
+                    transcript += e.results[i][0].transcript;
+                }
+                taskInput.value = transcript;
+            };
+            recognition.onend = () => { isRecording = false; btnVoice.classList.remove('recording'); };
+            recognition.onerror = () => { isRecording = false; btnVoice.classList.remove('recording'); };
+        }
+        btnVoice.addEventListener('click', () => {
+            if (!recognition) { alert('Speech recognition not supported in this browser'); return; }
+            if (isRecording) { recognition.stop(); }
+            else { recognition.start(); isRecording = true; btnVoice.classList.add('recording'); }
+        });
+
+        // ── Image Upload ────────────────────────────
+        const btnUpload = $('btnUpload');
+        const imageUpload = $('imageUpload');
+        const imagePreview = $('imagePreview');
+        let uploadedImageData = null;
+        btnUpload.addEventListener('click', () => imageUpload.click());
+        imageUpload.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                imagePreview.src = ev.target.result;
+                imagePreview.style.display = '';
+                uploadedImageData = file;
+            };
+            reader.readAsDataURL(file);
+        });
+        // Override task submission to include image
+        const origSubmit = taskForm.onsubmit;
+        taskForm.addEventListener('submit', (e) => {
+            if (uploadedImageData) {
+                e.preventDefault();
+                const formData = new FormData();
+                formData.append('image', uploadedImageData);
+                formData.append('prompt', taskInput.value || 'Analyze this image');
+                fetch('/api/vision', { method: 'POST', body: formData })
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.analysis) {
+                            const task = taskInput.value + ' [Image Analysis: ' + data.analysis.slice(0, 200) + ']';
+                            socket.emit('submit_task', { task });
+                        }
+                        uploadedImageData = null;
+                        imagePreview.style.display = 'none';
+                        taskInput.value = '';
+                    });
+            }
+        }, true);
+
+        // ── Text-to-Speech ──────────────────────────
+        const btnTTS = $('btnTTS');
+        let ttsEnabled = false;
+        btnTTS.addEventListener('click', () => {
+            ttsEnabled = !ttsEnabled;
+            btnTTS.classList.toggle('active', ttsEnabled);
+            btnTTS.title = ttsEnabled ? 'TTS enabled (click to disable)' : 'Toggle text-to-speech';
+        });
+        function speak(text) {
+            if (!ttsEnabled || !window.speechSynthesis) return;
+            const clean = text.replace(/[{}"\[\]]/g, '').slice(0, 300);
+            const utterance = new SpeechSynthesisUtterance(clean);
+            utterance.rate = 1.1;
+            utterance.pitch = 0.9;
+            speechSynthesis.speak(utterance);
+        }
+
+        // ── Dynamic Agent Panels ────────────────────
+        socket.on('agents_spawned', (d) => {
+            const tid = d.task_id;
+            const t = tid && tasks[tid] ? tasks[tid] : null;
+            if (!t) return;
+            const agents = d.agents || [];
+            // Add specialist badges to comms header
+            const specialists = agents.filter(a => !['architect','developer'].includes(a.id));
+            if (specialists.length > 0) {
+                const badges = specialists.map(a =>
+                    '<span class="agent-badge" style="border-color:'+a.color+';color:'+a.color+'">'+a.label+'</span>'
+                ).join('');
+                appendTo(t.commsBody, '<div style="padding:4px 8px;text-align:center">'+badges+'</div>');
+            }
+        });
+
+        // Handle specialist agent messages
+        const origAgentMsg = null;
+        socket.on('agent_message', (d) => {
+            const p = getTP(d);
+            const from = d.from, to = d.to, content = d.content, turn = d.turn;
+            // Specialist agents go to comms panel
+            if (!['architect','developer'].includes(from)) {
+                const roleInfo = {researcher:'🔍',tester:'🧪',security:'🛡',devops:'⚙'};
+                const icon = roleInfo[from] || '🤖';
+                appendTo(p.commsBody, '<div class="msg"><div class="msg-meta">'+icon+' '+from+' → team &middot; Turn '+turn+'</div><div class="msg-content">'+esc(content)+'</div></div>');
+                speak(content);
+                return;
+            }
+            // Original architect/developer message handling
+            const arrow = from + ' → ' + to;
+            const cls = from === 'architect' ? 'from-arch' : 'from-dev';
+            appendTo(p.commsBody, '<div class="msg '+cls+'"><div class="msg-meta">'+arrow+' &middot; Turn '+turn+'</div><div class="msg-content">'+esc(content)+'</div></div>');
+            appendTo(from==='architect'?p.archBody:p.devBody, '<div class="msg"><div class="msg-content">'+esc(content)+'</div></div>');
+            speak(content);
+        });
+
+        // ── Memory Badge ────────────────────────────
+        function updateMemory() {
+            fetch('/api/memory').then(r=>r.json()).then(d => {
+                $('memoryBadge').textContent = '🧬 ' + (d.count||0) + ' memories';
+            }).catch(()=>{});
+        }
+        updateMemory();
+        setInterval(updateMemory, 30000);
+        $('memoryBadge').addEventListener('click', () => {
+            const q = prompt('Search memories:');
+            if (!q) return;
+            fetch('/api/memory/search', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({query: q, limit: 5})
+            }).then(r=>r.json()).then(d => {
+                const results = (d.results||[]).map(r => r.text).join('\n---\n');
+                alert(results || 'No memories found');
+            });
+        });
+
+        // ── TTS on answers ──────────────────────────
+        socket.on('answer', (d) => {
+            const p = getTP(d);
+            appendTo(p.commsBody, '<div class="msg from-system"><div class="msg-content">'+esc(d.text)+'</div></div>');
+            speak(d.text);
+        });
+
+        // ── Done with memory count ──────────────────
+        socket.on('done', (d) => {
+            const p = getTP(d);
+            let html = '<div class="msg from-system"><div class="msg-content" style="color:var(--cyan)">✅ '+esc(d.summary)+'</div>';
+            if (d.files && d.files.length) html += '<div style="font-size:0.75rem;margin-top:4px;color:var(--text-dim)">Files: '+d.files.join(', ')+'</div>';
+            if (d.memory_count) html += '<div style="font-size:0.7rem;margin-top:2px;color:#34d399">🧬 '+d.memory_count+' memories stored</div>';
+            html += '</div></div>';
+            appendTo(p.commsBody, html);
+            speak('Task complete: ' + d.summary);
+            updateMemory();
         });
     </script>
 </body>
