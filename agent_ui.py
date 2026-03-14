@@ -2462,16 +2462,44 @@ try:
     if _cloud_mode:
         import eventlet
         eventlet.monkey_patch()
+        # Suppress eventlet socket cleanup warnings on Cloud Run
+        import logging as _logging
+        _logging.getLogger("eventlet.wsgi.server").setLevel(_logging.CRITICAL)
+        _logging.getLogger("gunicorn.error").setLevel(_logging.WARNING)
 except ImportError:
     _async_mode = "threading"
 
-socketio = SocketIO(app, async_mode=_async_mode, cors_allowed_origins="*")
+socketio = SocketIO(
+    app,
+    async_mode=_async_mode,
+    cors_allowed_origins="*",
+    ping_timeout=60,       # Match Cloud Run LB timeout
+    ping_interval=25,      # Keep connection alive
+    logger=False,          # Reduce SocketIO noise
+    engineio_logger=False,
+)
 
 # Per-session task pools: sid → {task_id → AgentEngine}
 task_pools = {}
 _pool_lock = threading.Lock()
 _task_counter = 0
 term_mgr = None
+
+# Graceful shutdown for Cloud Run SIGTERM
+import signal as _signal
+
+def _graceful_shutdown(signum, frame):
+    """Handle SIGTERM from Cloud Run — close SocketIO sessions cleanly."""
+    try:
+        with _pool_lock:
+            for sid, pool in task_pools.items():
+                for tid, engine in pool.items():
+                    engine.running = False
+    except Exception:
+        pass
+
+if _cloud_mode:
+    _signal.signal(_signal.SIGTERM, _graceful_shutdown)
 
 
 def _next_task_id():
@@ -2488,6 +2516,107 @@ def index():
     )
 
 
+# ── Health & Self-Diagnostics ────────────────────────────────────
+
+_error_log = []  # Rolling log of recent errors for self-diagnosis
+_ERROR_LOG_MAX = 50
+
+def _log_error(category, message):
+    """Track errors for self-diagnostic system."""
+    _error_log.append({
+        "time": datetime.now().isoformat(),
+        "category": category,
+        "message": str(message)[:500],
+    })
+    if len(_error_log) > _ERROR_LOG_MAX:
+        _error_log.pop(0)
+
+
+@app.route("/health")
+def health_check():
+    """Cloud Run health check + self-diagnostic summary."""
+    workspace = app.config.get("WORKSPACE", "./workspace")
+    config = app.config.get("SYNAPSE_CONFIG", {})
+
+    # Check providers
+    providers = {}
+    for pid, pcfg in config.get("providers", {}).items():
+        providers[pid] = bool(pcfg.get("api_key") and pcfg.get("enabled"))
+
+    # Check memory
+    mem_ok = False
+    mem_count = 0
+    try:
+        mem = SynapseMemory(workspace)
+        mem_count = mem.count()
+        mem_ok = True
+    except Exception:
+        pass
+
+    # Active sessions
+    with _pool_lock:
+        active_sessions = len(task_pools)
+        active_tasks = sum(len(pool) for pool in task_pools.values())
+
+    status = {
+        "status": "healthy",
+        "version": "1.0.0",
+        "cloud_mode": _cloud_mode,
+        "async_mode": _async_mode,
+        "providers": providers,
+        "memory": {"available": mem_ok, "count": mem_count},
+        "sessions": active_sessions,
+        "active_tasks": active_tasks,
+        "recent_errors": len(_error_log),
+        "a2a": {
+            "connected_agents": len(a2a.list_remote_agents()),
+            "active_tasks": len(a2a.tasks),
+        },
+    }
+
+    if _error_log:
+        status["last_error"] = _error_log[-1]
+
+    return json.dumps(status), 200, {"Content-Type": "application/json"}
+
+
+@app.route("/api/diagnostics")
+def self_diagnostics():
+    """Return self-diagnostic report — SYNAPSE can read this to fix itself."""
+    report = {
+        "errors": list(_error_log),
+        "recommendations": [],
+    }
+
+    # Analyze errors and generate fix recommendations
+    error_categories = {}
+    for e in _error_log:
+        cat = e.get("category", "unknown")
+        error_categories[cat] = error_categories.get(cat, 0) + 1
+
+    for cat, count in error_categories.items():
+        if cat == "socket" and count > 5:
+            report["recommendations"].append({
+                "issue": "Frequent socket errors",
+                "fix": "Increase ping_timeout or switch to gevent worker",
+                "severity": "medium",
+            })
+        elif cat == "provider" and count > 3:
+            report["recommendations"].append({
+                "issue": "AI provider failures",
+                "fix": "Check API keys, switch to fallback provider",
+                "severity": "high",
+            })
+        elif cat == "memory" and count > 2:
+            report["recommendations"].append({
+                "issue": "Memory/ChromaDB failures",
+                "fix": "Check disk space, reinstall chromadb",
+                "severity": "medium",
+            })
+
+    return json.dumps(report), 200, {"Content-Type": "application/json"}
+
+
 @socketio.on("connect")
 def on_connect():
     with _pool_lock:
@@ -2500,8 +2629,11 @@ def on_disconnect():
     with _pool_lock:
         pool = task_pools.pop(sid, {})
     for engine in pool.values():
-        engine.running = False
-        engine.stop_subconscious()
+        try:
+            engine.running = False
+            engine.stop_subconscious()
+        except Exception as e:
+            _log_error("socket", f"Cleanup error on disconnect: {e}")
 
 
 @socketio.on("submit_task")
