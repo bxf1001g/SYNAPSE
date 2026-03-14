@@ -61,7 +61,7 @@ CORTEX_MODELS = {
         "color": "#38bdf8",
     },
     "reason": {
-        "model": "gemini-2.5-pro-preview-06-05",
+        "model": "gemini-2.5-pro",
         "label": "🧠 Reasoning Cortex",
         "desc": "Deep thinking for architecture, debugging, complex logic",
         "temperature": 0.4,
@@ -77,7 +77,7 @@ CORTEX_MODELS = {
         "color": "#fb923c",
     },
     "visual": {
-        "model": "gemini-2.0-flash-preview-image-generation",
+        "model": "gemini-2.5-flash-image",
         "label": "👁 Visual Cortex",
         "desc": "Image generation, UI mockups, visual design",
         "temperature": 0.8,
@@ -104,8 +104,9 @@ CONFIG_FILE = ".synapse.json"
 PROVIDER_MODELS = {
     "gemini": [
         "gemini-2.0-flash-lite", "gemini-2.0-flash",
-        "gemini-2.5-pro-preview-06-05", "gemini-2.0-flash-preview-image-generation",
-        "gemini-1.5-pro", "gemini-1.5-flash",
+        "gemini-2.5-pro", "gemini-2.5-flash",
+        "gemini-2.5-flash-image", "gemini-2.5-flash-lite",
+        "gemini-3-pro-preview", "gemini-3-flash-preview",
     ],
     "openai": [
         "gpt-4o", "gpt-4o-mini", "gpt-4-turbo",
@@ -129,9 +130,9 @@ DEFAULT_CONFIG = {
     },
     "cortex_map": {
         "fast": {"provider": "gemini", "model": "gemini-2.0-flash-lite"},
-        "reason": {"provider": "gemini", "model": "gemini-2.5-pro-preview-06-05"},
+        "reason": {"provider": "gemini", "model": "gemini-2.5-pro"},
         "create": {"provider": "gemini", "model": "gemini-2.0-flash"},
-        "visual": {"provider": "gemini", "model": "gemini-2.0-flash-preview-image-generation"},
+        "visual": {"provider": "gemini", "model": "gemini-2.5-flash-image"},
     },
 }
 
@@ -298,44 +299,64 @@ class NeuralCortex:
     def _unified_generate(self, provider_type, client, model, prompt,
                           system_prompt=None, temperature=0.7, max_tokens=8192):
         """One-shot generation for any provider. Returns text."""
-        if provider_type == "gemini":
-            gen_cfg = types.GenerateContentConfig(
-                temperature=temperature, max_output_tokens=max_tokens,
-            )
-            if system_prompt:
+        try:
+            if provider_type == "gemini":
                 gen_cfg = types.GenerateContentConfig(
-                    system_instruction=system_prompt,
                     temperature=temperature, max_output_tokens=max_tokens,
                 )
-            r = client.models.generate_content(
-                model=model, config=gen_cfg, contents=prompt
-            )
-            return r.text
+                if system_prompt:
+                    gen_cfg = types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        temperature=temperature, max_output_tokens=max_tokens,
+                    )
+                r = client.models.generate_content(
+                    model=model, config=gen_cfg, contents=prompt
+                )
+                return r.text
 
-        elif provider_type in ("openai", "openai_compatible"):
-            messages = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": prompt})
-            r = client.chat.completions.create(
-                model=model, messages=messages,
-                temperature=temperature, max_tokens=max_tokens,
-            )
-            return r.choices[0].message.content
+            elif provider_type in ("openai", "openai_compatible"):
+                messages = []
+                if system_prompt:
+                    messages.append({"role": "system", "content": system_prompt})
+                messages.append({"role": "user", "content": prompt})
+                r = client.chat.completions.create(
+                    model=model, messages=messages,
+                    temperature=temperature, max_tokens=max_tokens,
+                )
+                return r.choices[0].message.content
 
-        elif provider_type == "anthropic":
-            kwargs = {}
-            if system_prompt:
-                kwargs["system"] = system_prompt
-            r = client.messages.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature, max_tokens=max_tokens,
-                **kwargs,
-            )
-            return r.content[0].text
+            elif provider_type == "anthropic":
+                kwargs = {}
+                if system_prompt:
+                    kwargs["system"] = system_prompt
+                r = client.messages.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=temperature, max_tokens=max_tokens,
+                    **kwargs,
+                )
+                return r.content[0].text
 
-        raise ValueError(f"Unknown provider: {provider_type}")
+            raise ValueError(f"Unknown provider: {provider_type}")
+        except Exception as e:
+            error_msg = str(e)
+            if "not found" in error_msg.lower() or "invalid" in error_msg.lower():
+                # Model name is bad — try fallback to gemini-2.0-flash
+                print(f"[CORTEX] Model '{model}' failed ({error_msg}), falling back to gemini-2.0-flash")
+                if provider_type == "gemini":
+                    gen_cfg = types.GenerateContentConfig(
+                        temperature=temperature, max_output_tokens=max_tokens,
+                    )
+                    if system_prompt:
+                        gen_cfg = types.GenerateContentConfig(
+                            system_instruction=system_prompt,
+                            temperature=temperature, max_output_tokens=max_tokens,
+                        )
+                    r = client.models.generate_content(
+                        model="gemini-2.0-flash", config=gen_cfg, contents=prompt
+                    )
+                    return r.text
+            raise
 
     def classify(self, task_text):
         """Route task to the right cortex. Fast pattern match first, then LLM."""
@@ -1560,6 +1581,9 @@ def _run_task(engine, task, task_id, sid):
         # Build
         engine.emit("status", {"agent": "system", "status": "building"})
         engine.start_build(task, plan)
+    except Exception as e:
+        engine.emit("error", {"agent": "system", "error": f"Task failed: {e}"})
+        engine.emit("task_complete", {"type": "error"})
     finally:
         # Clean up from pool
         with _pool_lock:

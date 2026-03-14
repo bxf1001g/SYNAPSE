@@ -28,7 +28,7 @@ SYNAPSE models its AI processing after the human brain — **four specialized co
 | ⚡ **Fast** | Classification, simple queries | gemini-2.0-flash-lite |
 | 🧠 **Reasoning** | Architecture, debugging, deep analysis | gemini-2.5-pro |
 | 🎨 **Creative** | Code generation, building apps | gemini-2.0-flash |
-| 👁 **Visual** | Image generation, UI mockups | gemini-2.0-flash-preview / DALL-E |
+| 👁 **Visual** | Image generation, UI mockups | gemini-2.5-flash-image / DALL-E 3 |
 
 Each cortex can be mapped to **any provider and model** via the UI settings.
 
@@ -97,7 +97,10 @@ pip install -r requirements.txt
 
 ### 2. Configure
 
-**Option A: Environment variable**
+**Option A: Web UI (recommended)**
+Just launch SYNAPSE and click the ⚙ gear icon to configure any provider — Gemini, OpenAI, Anthropic, or any OpenAI-compatible API (Ollama, Groq, Together, etc.).
+
+**Option B: Environment variable (Gemini quick start)**
 ```bash
 # Windows
 set GEMINI_API_KEY=your-gemini-api-key
@@ -106,8 +109,7 @@ set GEMINI_API_KEY=your-gemini-api-key
 export GEMINI_API_KEY=your-gemini-api-key
 ```
 
-**Option B: Web UI (recommended)**
-Just launch SYNAPSE and click the ⚙ gear icon to configure any provider.
+> **Note:** SYNAPSE supports **multiple AI providers simultaneously**. You can configure different models for different cortices — e.g., Claude for reasoning, GPT-4o for code generation, Gemini for fast classification. Add API keys for any combination via the Settings UI.
 
 ### 3. Launch
 
@@ -165,7 +167,7 @@ Settings are stored in `.synapse.json` (auto-generated, git-ignored):
     "fast": { "provider": "gemini", "model": "gemini-2.0-flash-lite" },
     "reason": { "provider": "anthropic", "model": "claude-sonnet-4-20250514" },
     "create": { "provider": "openai", "model": "gpt-4o" },
-    "visual": { "provider": "gemini", "model": "gemini-2.0-flash-preview-image-generation" }
+    "visual": { "provider": "gemini", "model": "gemini-2.5-flash-image" }
   }
 }
 ```
