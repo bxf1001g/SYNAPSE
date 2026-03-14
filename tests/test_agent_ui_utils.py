@@ -117,7 +117,7 @@ class TestConfig:
 
             cfg = load_config(base_dir=td)
             # Falls back to defaults
-            assert cfg == json.loads(json.dumps(DEFAULT_CONFIG))
+            assert cfg == DEFAULT_CONFIG
 
     def test_cortex_map_defaults(self):
         with tempfile.TemporaryDirectory() as td:
