@@ -2617,6 +2617,395 @@ def self_diagnostics():
     return json.dumps(report), 200, {"Content-Type": "application/json"}
 
 
+# ── Self-Healing Loop ────────────────────────────────────────────
+
+_healing_thread = None
+_healing_active = False
+_healing_log = []    # History of self-healing actions
+_HEALING_LOG_MAX = 20
+_HEAL_CHECK_INTERVAL = 300   # Check every 5 minutes
+_HEAL_ERROR_THRESHOLD = 5    # Trigger healing after N errors
+_HEAL_COOLDOWN = 1800        # 30 min cooldown between heal attempts
+
+_last_heal_time = 0
+
+
+def _self_heal_loop():
+    """Background loop: monitor health → diagnose → fix → push."""
+    global _last_heal_time, _healing_active
+    _healing_active = True
+
+    while _healing_active:
+        try:
+            time.sleep(_HEAL_CHECK_INTERVAL)
+            if not _healing_active:
+                break
+
+            # Skip if not enough errors
+            if len(_error_log) < _HEAL_ERROR_THRESHOLD:
+                continue
+
+            # Skip if on cooldown
+            now = time.time()
+            if now - _last_heal_time < _HEAL_COOLDOWN:
+                continue
+
+            # Gather diagnostic data
+            error_summary = {}
+            for e in _error_log:
+                cat = e.get("category", "unknown")
+                error_summary[cat] = error_summary.get(cat, 0) + 1
+
+            # Only heal if errors are recurring (not one-offs)
+            recurring = {k: v for k, v in error_summary.items() if v >= 3}
+            if not recurring:
+                continue
+
+            _healing_log.append({
+                "time": datetime.now().isoformat(),
+                "action": "diagnosis_started",
+                "errors": dict(error_summary),
+            })
+
+            # Get the config and try to call AI for diagnosis
+            config = app.config.get("SYNAPSE_CONFIG", {})
+            workspace = app.config.get("WORKSPACE", "./workspace")
+
+            # Build error report for AI
+            recent_errors = _error_log[-20:]
+            error_text = "\n".join(
+                f"[{e['time']}] ({e['category']}) {e['message']}"
+                for e in recent_errors
+            )
+
+            diagnosis_prompt = f"""You are SYNAPSE's self-healing system. Analyze these recurring errors from the Cloud Run deployment and generate a fix.
+
+RECURRING ERROR CATEGORIES: {json.dumps(recurring)}
+
+RECENT ERROR LOG:
+{error_text}
+
+CURRENT SYSTEM:
+- Running on Google Cloud Run with gunicorn + eventlet
+- Flask + Flask-SocketIO backend
+- Main file: agent_ui.py
+- Dockerfile uses: gunicorn --worker-class eventlet --workers 1
+
+RULES:
+1. Only fix errors you are confident about. Don't change unrelated code.
+2. If the fix requires changing agent_ui.py or Dockerfile, provide the EXACT file content changes.
+3. For configuration fixes, prefer environment variables or gunicorn flags.
+4. NEVER change API keys or security-sensitive code.
+5. If you cannot determine a safe fix, respond with "NO_FIX_NEEDED".
+
+Respond in this JSON format:
+{{
+  "diagnosis": "brief description of the root cause",
+  "confidence": 0.0-1.0,
+  "fix_type": "code_change" | "config_change" | "no_fix",
+  "files": [
+    {{"path": "relative/path.py", "search": "exact text to find", "replace": "replacement text"}}
+  ],
+  "reason": "why this fix will resolve the errors"
+}}
+
+Only respond with the JSON, nothing else."""
+
+            # Call AI for diagnosis
+            fix_data = _call_healer_ai(config, diagnosis_prompt)
+            if not fix_data:
+                _healing_log.append({
+                    "time": datetime.now().isoformat(),
+                    "action": "diagnosis_failed",
+                    "reason": "AI call failed or returned no fix",
+                })
+                continue
+
+            confidence = fix_data.get("confidence", 0)
+            fix_type = fix_data.get("fix_type", "no_fix")
+
+            _healing_log.append({
+                "time": datetime.now().isoformat(),
+                "action": "diagnosis_complete",
+                "diagnosis": fix_data.get("diagnosis", ""),
+                "confidence": confidence,
+                "fix_type": fix_type,
+            })
+
+            # Only apply fixes with high confidence
+            if fix_type == "no_fix" or confidence < 0.7:
+                _healing_log.append({
+                    "time": datetime.now().isoformat(),
+                    "action": "fix_skipped",
+                    "reason": f"Low confidence ({confidence}) or no fix needed",
+                })
+                continue
+
+            # Apply the fix
+            files_to_modify = fix_data.get("files", [])
+            if not files_to_modify:
+                continue
+
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            success = _apply_heal_fix(project_root, files_to_modify, fix_data, config)
+
+            _last_heal_time = time.time()
+
+            if success:
+                # Clear error log after successful heal
+                _error_log.clear()
+                _healing_log.append({
+                    "time": datetime.now().isoformat(),
+                    "action": "fix_applied",
+                    "diagnosis": fix_data.get("diagnosis", ""),
+                    "files": [f.get("path", "") for f in files_to_modify],
+                })
+            else:
+                _healing_log.append({
+                    "time": datetime.now().isoformat(),
+                    "action": "fix_failed",
+                    "reason": "Could not apply fix or push to GitHub",
+                })
+
+        except Exception as e:
+            _healing_log.append({
+                "time": datetime.now().isoformat(),
+                "action": "heal_loop_error",
+                "error": str(e)[:300],
+            })
+            time.sleep(60)  # Back off on errors
+
+    # Trim healing log
+    while len(_healing_log) > _HEALING_LOG_MAX:
+        _healing_log.pop(0)
+
+
+def _call_healer_ai(config, prompt):
+    """Call AI to diagnose errors and generate fixes."""
+    try:
+        providers = config.get("providers", {})
+
+        # Try Gemini first
+        gemini_cfg = providers.get("gemini", {})
+        if gemini_cfg.get("api_key") and gemini_cfg.get("enabled") and genai:
+            client = genai.Client(api_key=gemini_cfg["api_key"])
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt,
+            )
+            text = response.text.strip()
+            # Extract JSON from response
+            if text.startswith("```"):
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+            return json.loads(text)
+
+        # Try OpenAI
+        openai_cfg = providers.get("openai", {})
+        if openai_cfg.get("api_key") and openai_cfg.get("enabled") and _openai_available:
+            client = openai_sdk.OpenAI(api_key=openai_cfg["api_key"])
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+            )
+            return json.loads(response.choices[0].message.content)
+
+        # Try Anthropic
+        anthropic_cfg = providers.get("anthropic", {})
+        if anthropic_cfg.get("api_key") and anthropic_cfg.get("enabled") and _anthropic_available:
+            client = anthropic_sdk.Anthropic(api_key=anthropic_cfg["api_key"])
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=2000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = response.content[0].text.strip()
+            if text.startswith("```"):
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+            return json.loads(text)
+
+    except Exception as e:
+        _healing_log.append({
+            "time": datetime.now().isoformat(),
+            "action": "ai_call_error",
+            "error": str(e)[:200],
+        })
+    return None
+
+
+def _apply_heal_fix(project_root, files, fix_data, config):
+    """Apply a self-healing fix: search-replace in files, then git push."""
+    try:
+        modified = []
+        for f in files:
+            path = f.get("path", "")
+            search = f.get("search", "")
+            replace = f.get("replace", "")
+            if not path or not search:
+                continue
+
+            full_path = os.path.join(project_root, path)
+            if not os.path.exists(full_path):
+                continue
+
+            with open(full_path, "r", encoding="utf-8") as fh:
+                content = fh.read()
+
+            if search not in content:
+                continue
+
+            # Safety: only allow one occurrence to prevent mass changes
+            if content.count(search) != 1:
+                continue
+
+            new_content = content.replace(search, replace, 1)
+
+            # Validate Python files
+            if path.endswith(".py"):
+                try:
+                    compile(new_content, path, "exec")
+                except SyntaxError:
+                    _healing_log.append({
+                        "time": datetime.now().isoformat(),
+                        "action": "fix_rejected",
+                        "reason": f"Syntax error in {path}",
+                    })
+                    return False
+
+            with open(full_path, "w", encoding="utf-8") as fh:
+                fh.write(new_content)
+            modified.append(path)
+
+        if not modified:
+            return False
+
+        # Git commit and push
+        token = config.get("providers", {}).get("github", {}).get("api_key", "")
+        if not token:
+            token = os.environ.get("GITHUB_TOKEN", "")
+
+        git = lambda cmd: subprocess.run(
+            f"git {cmd}", shell=True, cwd=project_root,
+            capture_output=True, text=True, timeout=60,
+        )
+
+        reason = fix_data.get("reason", "self-healing fix")[:80]
+        branch = f"synapse-heal-{int(time.time())}"
+
+        git("config user.email synapse-healer@noreply.github.com")
+        git("config user.name SYNAPSE-Healer")
+        git(f"checkout -b {branch}")
+        git("add -A")
+        r = git(f'commit -m "heal: {reason}"')
+        if r.returncode != 0:
+            git("checkout main 2>nul || git checkout master")
+            return False
+
+        # Push
+        remote_url = git("remote get-url origin").stdout.strip()
+        if token and "github.com" in remote_url:
+            push_url = remote_url.replace(
+                "https://github.com",
+                f"https://x-access-token:{token}@github.com"
+            )
+            r = git(f"push {push_url} {branch}")
+        else:
+            r = git(f"push origin {branch}")
+
+        git("checkout main 2>nul || git checkout master")
+
+        if r.returncode != 0:
+            return False
+
+        # Create PR
+        if token and _github_available:
+            try:
+                g = _Github(token)
+                m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", remote_url)
+                if m:
+                    repo = g.get_repo(m.group(1))
+                    diagnosis = fix_data.get("diagnosis", "Auto-diagnosed issue")
+                    files_str = ", ".join(modified)
+                    pr = repo.create_pull(
+                        title=f"🩺 SYNAPSE Self-Heal: {reason}",
+                        body=(
+                            f"**Automated self-healing by SYNAPSE's health monitor**\n\n"
+                            f"**Diagnosis:** {diagnosis}\n\n"
+                            f"**Confidence:** {fix_data.get('confidence', 'N/A')}\n\n"
+                            f"**Files modified:** {files_str}\n\n"
+                            f"**Error categories fixed:** {json.dumps(fix_data.get('errors', {}))}\n\n"
+                            f"---\n"
+                            f"*This PR was created automatically by SYNAPSE's self-healing system. "
+                            f"Review before merging.*"
+                        ),
+                        head=branch,
+                        base=repo.default_branch,
+                    )
+                    _healing_log.append({
+                        "time": datetime.now().isoformat(),
+                        "action": "pr_created",
+                        "url": pr.html_url,
+                    })
+            except Exception as e:
+                _healing_log.append({
+                    "time": datetime.now().isoformat(),
+                    "action": "pr_creation_failed",
+                    "error": str(e)[:200],
+                })
+
+        return True
+
+    except Exception as e:
+        _healing_log.append({
+            "time": datetime.now().isoformat(),
+            "action": "apply_fix_error",
+            "error": str(e)[:200],
+        })
+        return False
+
+
+def _start_healing_loop():
+    """Start the self-healing background thread."""
+    global _healing_thread
+    if _healing_thread and _healing_thread.is_alive():
+        return
+    _healing_thread = threading.Thread(target=_self_heal_loop, daemon=True, name="synapse-healer")
+    _healing_thread.start()
+
+
+@app.route("/api/healing")
+def healing_status():
+    """Get self-healing system status and history."""
+    return json.dumps({
+        "active": _healing_active,
+        "check_interval_seconds": _HEAL_CHECK_INTERVAL,
+        "error_threshold": _HEAL_ERROR_THRESHOLD,
+        "cooldown_seconds": _HEAL_COOLDOWN,
+        "current_errors": len(_error_log),
+        "last_heal_time": datetime.fromtimestamp(_last_heal_time).isoformat() if _last_heal_time else None,
+        "history": list(_healing_log),
+    }), 200, {"Content-Type": "application/json"}
+
+
+@app.route("/api/healing/trigger", methods=["POST"])
+def trigger_healing():
+    """Manually trigger a self-healing check (bypasses cooldown)."""
+    global _last_heal_time
+    _last_heal_time = 0  # Reset cooldown
+    if not _healing_thread or not _healing_thread.is_alive():
+        _start_healing_loop()
+    return json.dumps({"status": "healing_triggered", "errors_queued": len(_error_log)})
+
+
+# Auto-start healer in Cloud Run
+if _cloud_mode:
+    _start_healing_loop()
+
+
 @socketio.on("connect")
 def on_connect():
     with _pool_lock:

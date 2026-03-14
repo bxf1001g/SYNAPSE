@@ -990,6 +990,7 @@
             <button class="btn-settings" id="btnSettings" title="Settings">⚙</button>
             <span class="memory-badge" id="memoryBadge" title="Long-term memories">🧬 0 memories</span>
             <span class="a2a-badge" id="a2aBadge" title="A2A Connected Agents">🔗 0 agents</span>
+            <span class="a2a-badge" id="healBadge" title="Self-Healing System" style="background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#f87171">🩺 healer</span>
             <span style="opacity:0.4">{{ workspace }}</span>
         </div>
     </div>
@@ -1734,6 +1735,52 @@
 
         // Refresh A2A count on load
         refreshA2AAgents();
+
+        // ── Self-Healing Monitor ───────────────────────
+        function updateHealBadge() {
+            fetch('/api/healing').then(r=>r.json()).then(d => {
+                const errs = d.current_errors || 0;
+                const badge = $('healBadge');
+                if (errs > 0) {
+                    badge.textContent = '🩺 ' + errs + ' errors';
+                    badge.style.background = 'rgba(239,68,68,0.25)';
+                } else {
+                    badge.textContent = '🩺 healthy';
+                    badge.style.background = 'rgba(52,211,153,0.15)';
+                    badge.style.borderColor = 'rgba(52,211,153,0.3)';
+                    badge.style.color = '#34d399';
+                }
+            }).catch(()=>{});
+        }
+        updateHealBadge();
+        setInterval(updateHealBadge, 60000);
+
+        $('healBadge').addEventListener('click', () => {
+            fetch('/api/healing').then(r=>r.json()).then(d => {
+                let msg = '🩺 SYNAPSE Self-Healing Status\n\n';
+                msg += 'Active: ' + (d.active ? 'YES' : 'NO') + '\n';
+                msg += 'Current errors: ' + (d.current_errors || 0) + '\n';
+                msg += 'Check interval: ' + d.check_interval_seconds + 's\n';
+                msg += 'Error threshold: ' + d.error_threshold + '\n';
+                msg += 'Last heal: ' + (d.last_heal_time || 'never') + '\n\n';
+                if (d.history && d.history.length) {
+                    msg += '--- Recent Actions ---\n';
+                    d.history.slice(-5).forEach(h => {
+                        msg += '[' + h.time + '] ' + h.action;
+                        if (h.diagnosis) msg += ' — ' + h.diagnosis;
+                        if (h.url) msg += ' → ' + h.url;
+                        if (h.error) msg += ' ⚠ ' + h.error;
+                        msg += '\n';
+                    });
+                }
+                msg += '\nTrigger manual heal check?';
+                if (confirm(msg)) {
+                    fetch('/api/healing/trigger', {method:'POST'}).then(r=>r.json()).then(r => {
+                        alert('Healing triggered! ' + r.errors_queued + ' errors queued for analysis.');
+                    });
+                }
+            });
+        });
     </script>
 </body>
 </html>
