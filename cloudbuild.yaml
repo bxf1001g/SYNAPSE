@@ -33,7 +33,7 @@ steps:
       - '--concurrency=10'
       - '--min-instances=1'
       - '--use-http2=false'
-      - '--set-env-vars=SYNAPSE_CLOUD_MODE=1'
+      - '--set-env-vars=SYNAPSE_CLOUD_MODE=1,GEMINI_API_KEY=${_GEMINI_API_KEY},GITHUB_TOKEN=${_GITHUB_TOKEN}'
 
 substitutions:
   _SERVICE_NAME: synapse
