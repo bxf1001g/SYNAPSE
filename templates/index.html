@@ -928,6 +928,50 @@
         .btn-tts { background: transparent; border: none; cursor: pointer;
             font-size: 0.9rem; opacity: 0.5; transition: opacity 0.3s; }
         .btn-tts.active { opacity: 1; }
+        /* A2A Connected Agents */
+        .a2a-badge {
+            font-size: 0.65rem; padding: 1px 6px; border-radius: 8px;
+            background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.3);
+            color: #818cf8; cursor: pointer; transition: all 0.3s;
+        }
+        .a2a-badge:hover { background: rgba(99,102,241,0.3); }
+        .a2a-panel {
+            display: none; position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%,-50%); width: 520px; max-height: 80vh;
+            background: var(--bg-card); border: 1px solid rgba(99,102,241,0.3);
+            border-radius: 12px; padding: 20px; z-index: 2000;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.5); overflow-y: auto;
+        }
+        .a2a-panel.active { display: block; }
+        .a2a-panel h3 { color: #818cf8; margin: 0 0 12px; font-size: 1rem; }
+        .a2a-panel .close-btn {
+            position: absolute; top: 10px; right: 14px; background: none;
+            border: none; color: #666; font-size: 1.2rem; cursor: pointer;
+        }
+        .a2a-agent-item {
+            background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.2);
+            border-radius: 8px; padding: 10px 12px; margin: 8px 0;
+        }
+        .a2a-agent-item .agent-name { color: #818cf8; font-weight: 600; font-size: 0.85rem; }
+        .a2a-agent-item .agent-url { color: #666; font-size: 0.7rem; word-break: break-all; }
+        .a2a-agent-item .agent-skills { color: #888; font-size: 0.7rem; margin-top: 4px; }
+        .a2a-input-row { display: flex; gap: 8px; margin: 10px 0; }
+        .a2a-input-row input {
+            flex: 1; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px; padding: 6px 10px; color: #fff; font-size: 0.8rem;
+        }
+        .a2a-input-row button {
+            background: rgba(99,102,241,0.3); border: 1px solid rgba(99,102,241,0.5);
+            border-radius: 6px; padding: 6px 14px; color: #818cf8; cursor: pointer;
+            font-size: 0.75rem; font-weight: 600; transition: all 0.3s;
+        }
+        .a2a-input-row button:hover { background: rgba(99,102,241,0.5); }
+        .a2a-task-row { display: flex; gap: 8px; margin: 8px 0; }
+        .a2a-task-row select {
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px; padding: 6px 10px; color: #fff; font-size: 0.8rem; min-width: 140px;
+        }
+        .a2a-task-row option { background: #1a1a2e; }
     </style>
 </head>
 <body>
@@ -945,6 +989,7 @@
             <span id="brainPulse" style="width:8px;height:8px;border-radius:50%;background:var(--purple);display:inline-block;animation:pulse 2s ease-in-out infinite"></span>
             <button class="btn-settings" id="btnSettings" title="Settings">⚙</button>
             <span class="memory-badge" id="memoryBadge" title="Long-term memories">🧬 0 memories</span>
+            <span class="a2a-badge" id="a2aBadge" title="A2A Connected Agents">🔗 0 agents</span>
             <span style="opacity:0.4">{{ workspace }}</span>
         </div>
     </div>
@@ -1048,6 +1093,38 @@
             </div>
         </div>
     </div>
+
+    <!-- ── A2A Agent Panel ───────────────────────────── -->
+    <div class="a2a-panel" id="a2aPanel">
+        <button class="close-btn" id="a2aClose">✕</button>
+        <h3>🔗 A2A Agent Network</h3>
+        <p style="color:#888;font-size:0.75rem;margin:0 0 12px">Connect SYNAPSE to other A2A-compatible agents (Moltbot, OpenClaw, custom agents). They can exchange tasks and collaborate.</p>
+
+        <div style="color:#aaa;font-size:0.75rem;margin-bottom:8px;font-weight:600">Discover & Connect Agent</div>
+        <div class="a2a-input-row">
+            <input type="text" id="a2aAgentUrl" placeholder="https://other-agent.example.com">
+            <button id="a2aDiscoverBtn">🔍 Discover</button>
+        </div>
+        <div id="a2aDiscoverResult" style="font-size:0.7rem;color:#888;min-height:20px;margin-bottom:12px"></div>
+
+        <div style="color:#aaa;font-size:0.75rem;margin-bottom:8px;font-weight:600">Send Task to Remote Agent</div>
+        <div class="a2a-task-row">
+            <select id="a2aAgentSelect"><option value="">— select agent —</option></select>
+            <input type="text" id="a2aTaskInput" placeholder="Task to delegate..." style="flex:1">
+            <button id="a2aSendBtn">📤 Send</button>
+        </div>
+        <div id="a2aSendResult" style="font-size:0.7rem;color:#888;min-height:20px;margin-bottom:12px"></div>
+
+        <div style="color:#aaa;font-size:0.75rem;margin-bottom:8px;font-weight:600">Connected Agents</div>
+        <div id="a2aAgentList" style="min-height:40px;color:#555;font-size:0.75rem">No agents connected yet.</div>
+
+        <hr style="border-color:rgba(255,255,255,0.06);margin:14px 0">
+        <div style="color:#aaa;font-size:0.75rem;margin-bottom:4px;font-weight:600">Your Agent Card</div>
+        <div style="font-size:0.65rem;color:#555;word-break:break-all" id="a2aMyCard">
+            <code style="color:#818cf8">GET /.well-known/agent.json</code> — other agents can discover SYNAPSE at this endpoint.
+        </div>
+    </div>
+    <div class="a2a-overlay" id="a2aOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1999"></div>
 
     <!-- ── Settings Modal ─────────────────────────── -->
     <div class="settings-overlay hidden" id="settingsModal">
@@ -1573,6 +1650,90 @@
             speak('Task complete: ' + d.summary);
             updateMemory();
         });
+
+        // ── A2A Agent Network ──────────────────────────
+        const a2aPanel = $('a2aPanel'), a2aOverlay = $('a2aOverlay');
+        function toggleA2A(show) {
+            a2aPanel.classList.toggle('active', show);
+            a2aOverlay.style.display = show ? 'block' : 'none';
+            if (show) refreshA2AAgents();
+        }
+        $('a2aBadge').addEventListener('click', () => toggleA2A(true));
+        $('a2aClose').addEventListener('click', () => toggleA2A(false));
+        $('a2aOverlay').addEventListener('click', () => toggleA2A(false));
+
+        function refreshA2AAgents() {
+            fetch('/api/a2a/agents').then(r=>r.json()).then(d => {
+                const agents = d.agents || [];
+                $('a2aBadge').textContent = '🔗 ' + agents.length + ' agent' + (agents.length!==1?'s':'');
+                const list = $('a2aAgentList');
+                const sel = $('a2aAgentSelect');
+                sel.innerHTML = '<option value="">— select agent —</option>';
+                if (!agents.length) { list.innerHTML = 'No agents connected yet.'; return; }
+                list.innerHTML = '';
+                agents.forEach(a => {
+                    const card = a.card || {};
+                    const skills = (card.skills || []).map(s => s.name).join(', ') || 'unknown';
+                    list.innerHTML += '<div class="a2a-agent-item">' +
+                        '<div class="agent-name">' + esc(card.name || a.id) + '</div>' +
+                        '<div class="agent-url">' + esc(a.url) + '</div>' +
+                        '<div class="agent-skills">Skills: ' + esc(skills) + '</div>' +
+                        '</div>';
+                    sel.innerHTML += '<option value="' + a.id + '">' + esc(card.name || a.id) + '</option>';
+                });
+            }).catch(()=>{});
+        }
+
+        $('a2aDiscoverBtn').addEventListener('click', () => {
+            const url = $('a2aAgentUrl').value.trim();
+            if (!url) return;
+            $('a2aDiscoverResult').textContent = 'Discovering...';
+            $('a2aDiscoverResult').style.color = '#888';
+            fetch('/api/a2a/discover', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({url: url})
+            }).then(r=>r.json()).then(d => {
+                if (d.error) {
+                    $('a2aDiscoverResult').textContent = '❌ ' + d.error;
+                    $('a2aDiscoverResult').style.color = '#f87171';
+                } else {
+                    $('a2aDiscoverResult').textContent = '✅ Connected to ' + (d.card?.name || url);
+                    $('a2aDiscoverResult').style.color = '#34d399';
+                    $('a2aAgentUrl').value = '';
+                    refreshA2AAgents();
+                }
+            }).catch(e => {
+                $('a2aDiscoverResult').textContent = '❌ ' + e.message;
+                $('a2aDiscoverResult').style.color = '#f87171';
+            });
+        });
+
+        $('a2aSendBtn').addEventListener('click', () => {
+            const agentId = $('a2aAgentSelect').value;
+            const task = $('a2aTaskInput').value.trim();
+            if (!agentId || !task) return;
+            $('a2aSendResult').textContent = 'Sending task...';
+            $('a2aSendResult').style.color = '#888';
+            fetch('/api/a2a/send', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({agent_id: agentId, task: task})
+            }).then(r=>r.json()).then(d => {
+                if (d.error) {
+                    $('a2aSendResult').textContent = '❌ ' + d.error;
+                    $('a2aSendResult').style.color = '#f87171';
+                } else {
+                    $('a2aSendResult').textContent = '✅ Task sent! ID: ' + (d.result?.id || 'ok');
+                    $('a2aSendResult').style.color = '#34d399';
+                    $('a2aTaskInput').value = '';
+                }
+            }).catch(e => {
+                $('a2aSendResult').textContent = '❌ ' + e.message;
+                $('a2aSendResult').style.color = '#f87171';
+            });
+        });
+
+        // Refresh A2A count on load
+        refreshA2AAgents();
     </script>
 </body>
 </html>

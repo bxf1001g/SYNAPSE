@@ -83,8 +83,249 @@ try:
 except ImportError:
     _docker_sdk = None
 
+# A2A Protocol (Agent-to-Agent)
+import uuid as _uuid
+import hashlib as _hashlib
 
-# ── Neural Model Configuration ──────────────────────────────────
+
+# ── A2A Protocol (Agent-to-Agent Interoperability) ──────────────
+
+class A2AProtocol:
+    """
+    Google A2A (Agent-to-Agent) protocol implementation.
+    Allows SYNAPSE to communicate with any A2A-compatible agent.
+    Spec: https://a2a-protocol.org/latest/
+    """
+
+    AGENT_CARD = {
+        "name": "SYNAPSE",
+        "description": "Neural Multi-Agent AI System — self-evolving, multi-provider, "
+                       "with persistent memory and dynamic agent spawning.",
+        "url": "",  # Set at runtime
+        "version": "1.0.0",
+        "provider": {
+            "organization": "Axonyx Quantum Private Limited",
+            "url": "https://github.com/bxf1001g/SYNAPSE",
+        },
+        "capabilities": {
+            "streaming": True,
+            "pushNotifications": False,
+            "stateTransitionHistory": True,
+        },
+        "authentication": {
+            "schemes": ["bearer"],
+        },
+        "defaultInputModes": ["text", "text/plain"],
+        "defaultOutputModes": ["text", "text/plain"],
+        "skills": [
+            {
+                "id": "code-generation",
+                "name": "Code Generation",
+                "description": "Generate complete applications with architect-developer collaboration",
+                "tags": ["code", "programming", "development", "app"],
+                "examples": [
+                    "Build a Flask REST API with JWT auth",
+                    "Create a React dashboard with charts",
+                    "Write a Python CLI tool for data processing",
+                ],
+            },
+            {
+                "id": "code-review",
+                "name": "Code Review & Debugging",
+                "description": "Review code for bugs, security issues, and improvements",
+                "tags": ["review", "debug", "security", "refactor"],
+                "examples": [
+                    "Review this PR for security vulnerabilities",
+                    "Debug why my async function hangs",
+                ],
+            },
+            {
+                "id": "research",
+                "name": "Research & Analysis",
+                "description": "Web crawling, technology research, and analysis",
+                "tags": ["research", "web", "analysis", "crawl"],
+                "examples": [
+                    "Research the latest React frameworks",
+                    "Compare PostgreSQL vs MongoDB for my use case",
+                ],
+            },
+            {
+                "id": "devops",
+                "name": "DevOps & Deployment",
+                "description": "Docker, CI/CD, cloud deployment configuration",
+                "tags": ["devops", "docker", "deploy", "ci/cd", "cloud"],
+                "examples": [
+                    "Set up GitHub Actions CI/CD pipeline",
+                    "Create a Dockerfile for my Python app",
+                ],
+            },
+        ],
+    }
+
+    # Task states per A2A spec
+    STATES = {
+        "submitted": "Task received but not started",
+        "working": "Agent is actively processing",
+        "input-required": "Agent needs more info from caller",
+        "completed": "Task finished successfully",
+        "failed": "Task failed",
+        "canceled": "Task was canceled",
+    }
+
+    def __init__(self, base_url=""):
+        self.base_url = base_url
+        self.tasks = {}          # task_id -> task object
+        self.connected_agents = {}  # agent_id -> agent card
+        self._lock = threading.Lock()
+
+    def get_agent_card(self):
+        """Return this agent's card (served at /.well-known/agent.json)."""
+        card = dict(self.AGENT_CARD)
+        card["url"] = self.base_url
+        return card
+
+    def create_task(self, task_text, caller_agent=None, context_id=None):
+        """Create a new A2A task."""
+        task_id = str(_uuid.uuid4())
+        task = {
+            "id": task_id,
+            "contextId": context_id or str(_uuid.uuid4()),
+            "status": {"state": "submitted", "timestamp": datetime.now().isoformat()},
+            "history": [],
+            "artifacts": [],
+            "metadata": {
+                "caller": caller_agent or "unknown",
+                "created": datetime.now().isoformat(),
+            },
+        }
+        # Add the input message
+        msg = {
+            "role": "user",
+            "parts": [{"type": "text", "text": task_text}],
+            "messageId": str(_uuid.uuid4()),
+            "timestamp": datetime.now().isoformat(),
+        }
+        task["history"].append(msg)
+
+        with self._lock:
+            self.tasks[task_id] = task
+        return task
+
+    def update_task_status(self, task_id, state, message=None):
+        """Update task state. Optionally add an agent message."""
+        with self._lock:
+            task = self.tasks.get(task_id)
+            if not task:
+                return None
+            task["status"] = {
+                "state": state,
+                "timestamp": datetime.now().isoformat(),
+            }
+            if message:
+                msg = {
+                    "role": "agent",
+                    "parts": [{"type": "text", "text": message}],
+                    "messageId": str(_uuid.uuid4()),
+                    "timestamp": datetime.now().isoformat(),
+                }
+                task["status"]["message"] = msg
+                task["history"].append(msg)
+            return task
+
+    def add_artifact(self, task_id, name, content, mime_type="text/plain"):
+        """Add an output artifact to a task."""
+        with self._lock:
+            task = self.tasks.get(task_id)
+            if not task:
+                return None
+            artifact = {
+                "artifactId": str(_uuid.uuid4()),
+                "name": name,
+                "parts": [{"type": "text", "text": content}]
+                if mime_type.startswith("text")
+                else [{"type": "data", "data": content, "mimeType": mime_type}],
+                "timestamp": datetime.now().isoformat(),
+            }
+            task["artifacts"].append(artifact)
+            return artifact
+
+    def get_task(self, task_id):
+        """Get task by ID."""
+        with self._lock:
+            return self.tasks.get(task_id)
+
+    def cancel_task(self, task_id):
+        """Cancel a running task."""
+        return self.update_task_status(task_id, "canceled", "Task canceled by caller.")
+
+    def register_remote_agent(self, agent_url, agent_card=None):
+        """Register a remote A2A agent for task delegation."""
+        agent_id = _hashlib.md5(agent_url.encode()).hexdigest()[:12]
+        entry = {
+            "id": agent_id,
+            "url": agent_url,
+            "card": agent_card,
+            "registered": datetime.now().isoformat(),
+            "status": "active",
+        }
+        with self._lock:
+            self.connected_agents[agent_id] = entry
+        return entry
+
+    def discover_remote_agent(self, agent_url):
+        """Fetch an agent's card from /.well-known/agent.json."""
+        if not _requests_available:
+            return {"error": "requests library not available"}
+        try:
+            well_known = agent_url.rstrip("/") + "/.well-known/agent.json"
+            resp = _requests.get(well_known, timeout=10)
+            if resp.status_code == 200:
+                card = resp.json()
+                registered = self.register_remote_agent(agent_url, card)
+                return {"status": "discovered", "agent": registered, "card": card}
+            return {"error": f"Agent card not found (HTTP {resp.status_code})"}
+        except Exception as e:
+            return {"error": f"Discovery failed: {str(e)}"}
+
+    def send_task_to_remote(self, agent_id, task_text):
+        """Send a task to a registered remote agent via A2A protocol."""
+        if not _requests_available:
+            return {"error": "requests library not available"}
+        with self._lock:
+            agent = self.connected_agents.get(agent_id)
+        if not agent:
+            return {"error": f"Agent {agent_id} not found"}
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": str(_uuid.uuid4()),
+            "method": "tasks/send",
+            "params": {
+                "id": str(_uuid.uuid4()),
+                "message": {
+                    "role": "user",
+                    "parts": [{"type": "text", "text": task_text}],
+                },
+            },
+        }
+        try:
+            url = agent["url"].rstrip("/") + "/a2a"
+            resp = _requests.post(url, json=payload, timeout=120)
+            return resp.json() if resp.status_code == 200 else {"error": f"HTTP {resp.status_code}"}
+        except Exception as e:
+            return {"error": f"Send failed: {str(e)}"}
+
+    def list_remote_agents(self):
+        """List all registered remote agents."""
+        with self._lock:
+            return list(self.connected_agents.values())
+
+
+# Global A2A instance
+a2a = A2AProtocol()
+
+
+
 
 CORTEX_MODELS = {
     "fast": {
@@ -2661,6 +2902,147 @@ def memory_search():
     mem = SynapseMemory(workspace)
     results = mem.recall(query, n=data.get("limit", 5))
     return json.dumps({"results": results})
+
+
+# ── A2A Protocol Endpoints ──────────────────────────────────────
+
+@app.route("/.well-known/agent.json", methods=["GET"])
+def a2a_agent_card():
+    """Serve the A2A Agent Card for discovery."""
+    base_url = request.host_url.rstrip("/")
+    a2a.base_url = base_url
+    card = a2a.get_agent_card()
+    return json.dumps(card), 200, {"Content-Type": "application/json"}
+
+
+@app.route("/a2a", methods=["POST"])
+def a2a_endpoint():
+    """Main A2A JSON-RPC endpoint for task exchange."""
+    data = request.get_json(silent=True) or {}
+
+    method = data.get("method", "")
+    params = data.get("params", {})
+    rpc_id = data.get("id", str(_uuid.uuid4()))
+
+    # ── tasks/send: Accept a new task from a remote agent
+    if method == "tasks/send":
+        msg = params.get("message", {})
+        parts = msg.get("parts", [])
+        task_text = ""
+        for p in parts:
+            if p.get("type") == "text":
+                task_text += p.get("text", "")
+
+        if not task_text:
+            return json.dumps({
+                "jsonrpc": "2.0", "id": rpc_id,
+                "error": {"code": -32602, "message": "No text content in message"},
+            }), 400
+
+        caller = msg.get("metadata", {}).get("agent", "remote-agent")
+        context_id = params.get("contextId") or params.get("id")
+        task = a2a.create_task(task_text, caller_agent=caller, context_id=context_id)
+        task_id = task["id"]
+
+        # Execute task asynchronously via SYNAPSE engine
+        def _run_a2a_task():
+            a2a.update_task_status(task_id, "working", "SYNAPSE is processing your task...")
+            try:
+                workspace = app.config.get("WORKSPACE", "./workspace")
+                config = app.config.get("SYNAPSE_CONFIG", {})
+                engine = AgentEngine(workspace, config)
+                engine.set_socketio(socketio, None)
+
+                plan = engine._classify_and_plan(task_text)
+                engine.start_build(task_text, plan, blocking=True)
+
+                # Collect output files as artifacts
+                for fpath in engine.files_created:
+                    try:
+                        with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                            content = f.read()[:10000]
+                        a2a.add_artifact(task_id, os.path.basename(fpath), content)
+                    except Exception:
+                        pass
+
+                a2a.update_task_status(task_id, "completed",
+                                       f"Task completed. {len(engine.files_created)} files created.")
+            except Exception as e:
+                a2a.update_task_status(task_id, "failed", f"Error: {str(e)}")
+
+        threading.Thread(target=_run_a2a_task, daemon=True).start()
+
+        return json.dumps({
+            "jsonrpc": "2.0", "id": rpc_id,
+            "result": task,
+        })
+
+    # ── tasks/get: Check task status
+    if method == "tasks/get":
+        task_id = params.get("id", "")
+        task = a2a.get_task(task_id)
+        if not task:
+            return json.dumps({
+                "jsonrpc": "2.0", "id": rpc_id,
+                "error": {"code": -32001, "message": "Task not found"},
+            }), 404
+        return json.dumps({"jsonrpc": "2.0", "id": rpc_id, "result": task})
+
+    # ── tasks/cancel: Cancel a running task
+    if method == "tasks/cancel":
+        task_id = params.get("id", "")
+        task = a2a.cancel_task(task_id)
+        if not task:
+            return json.dumps({
+                "jsonrpc": "2.0", "id": rpc_id,
+                "error": {"code": -32001, "message": "Task not found"},
+            }), 404
+        return json.dumps({"jsonrpc": "2.0", "id": rpc_id, "result": task})
+
+    return json.dumps({
+        "jsonrpc": "2.0", "id": rpc_id,
+        "error": {"code": -32601, "message": f"Method not found: {method}"},
+    }), 404
+
+
+@app.route("/api/a2a/agents", methods=["GET"])
+def a2a_list_agents():
+    """List all connected remote A2A agents."""
+    return json.dumps({"agents": a2a.list_remote_agents()})
+
+
+@app.route("/api/a2a/discover", methods=["POST"])
+def a2a_discover():
+    """Discover and register a remote A2A agent by URL."""
+    data = request.get_json(silent=True) or {}
+    url = data.get("url", "").strip()
+    if not url:
+        return json.dumps({"error": "url required"}), 400
+    result = a2a.discover_remote_agent(url)
+    return json.dumps(result)
+
+
+@app.route("/api/a2a/send", methods=["POST"])
+def a2a_send_task():
+    """Send a task to a remote agent."""
+    data = request.get_json(silent=True) or {}
+    agent_id = data.get("agent_id", "")
+    task_text = data.get("task", "")
+    if not agent_id or not task_text:
+        return json.dumps({"error": "agent_id and task required"}), 400
+    result = a2a.send_task_to_remote(agent_id, task_text)
+    return json.dumps(result)
+
+
+@app.route("/api/a2a/tasks", methods=["GET"])
+def a2a_list_tasks():
+    """List all A2A tasks."""
+    with a2a._lock:
+        tasks = [
+            {"id": t["id"], "status": t["status"], "metadata": t.get("metadata", {})}
+            for t in a2a.tasks.values()
+        ]
+    return json.dumps({"tasks": tasks})
 
 
 # ── Module-level init for gunicorn (Cloud Run) ──────────────────
