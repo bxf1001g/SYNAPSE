@@ -2,6 +2,17 @@ flask>=3.0
 flask-socketio>=5.3
 google-genai>=1.0
 
-# Optional providers (install as needed)
+# Web crawling
+requests>=2.31
+beautifulsoup4>=4.12
+
+# GitHub API
+PyGithub>=2.1
+
+# Optional AI providers (install as needed)
 openai>=1.0
 anthropic>=0.30
+
+# Cloud Run deployment
+gunicorn>=21.2
+eventlet>=0.35

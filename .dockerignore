@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.synapse_backups/
+.synapse.json
+myproject/
+workspace/
+*.log
+.env
+.venv/
+venv/
+node_modules/
+.pytest_cache/
+*.egg-info/
+dist/
+build/

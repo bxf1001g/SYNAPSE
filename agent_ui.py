@@ -38,6 +38,9 @@ except ImportError:
 # Optional provider SDKs (install as needed)
 _openai_available = False
 _anthropic_available = False
+_requests_available = False
+_bs4_available = False
+_github_available = False
 try:
     import openai as openai_sdk
     _openai_available = True
@@ -48,13 +51,28 @@ try:
     _anthropic_available = True
 except ImportError:
     pass
+try:
+    import requests as _requests
+    _requests_available = True
+except ImportError:
+    _requests = None
+try:
+    from bs4 import BeautifulSoup as _BS
+    _bs4_available = True
+except ImportError:
+    _BS = None
+try:
+    from github import Github as _Github
+    _github_available = True
+except ImportError:
+    _Github = None
 
 
 # ── Neural Model Configuration ──────────────────────────────────
 
 CORTEX_MODELS = {
     "fast": {
-        "model": "gemini-2.5-flash-lite",
+        "model": "gemini-3.1-flash-lite-preview",
         "label": "⚡ Fast Cortex",
         "desc": "Lightning-fast for classification, simple queries",
         "temperature": 0.2,
@@ -62,23 +80,23 @@ CORTEX_MODELS = {
         "color": "#38bdf8",
     },
     "reason": {
-        "model": "gemini-2.5-flash",
+        "model": "gemini-3.1-pro-preview",
         "label": "🧠 Reasoning Cortex",
-        "desc": "Deep thinking for architecture, debugging, complex logic",
+        "desc": "Top-tier reasoning for architecture, debugging, agent assignment",
         "temperature": 0.4,
         "max_tokens": 16384,
         "color": "#a78bfa",
     },
     "create": {
-        "model": "gemini-2.0-flash",
+        "model": "gemini-3-flash-preview",
         "label": "🎨 Creative Cortex",
-        "desc": "Code generation, building, standard development",
+        "desc": "Fast code generation, building, standard development",
         "temperature": 0.7,
         "max_tokens": 8192,
         "color": "#fb923c",
     },
     "visual": {
-        "model": "gemini-2.5-flash-image",
+        "model": "gemini-3.1-flash-image-preview",
         "label": "👁 Visual Cortex",
         "desc": "Image generation, UI mockups, visual design",
         "temperature": 0.8,
@@ -104,10 +122,11 @@ CONFIG_FILE = ".synapse.json"
 
 PROVIDER_MODELS = {
     "gemini": [
+        "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools",
+        "gemini-3.1-flash-lite-preview", "gemini-3.1-flash-image-preview",
+        "gemini-3-flash-preview", "gemini-3-pro-image-preview",
         "gemini-2.5-flash-lite", "gemini-2.5-flash",
-        "gemini-2.0-flash", "gemini-2.5-pro",
-        "gemini-2.5-flash-image",
-        "gemini-3-pro-preview", "gemini-3-flash-preview",
+        "gemini-2.5-pro", "gemini-2.0-flash",
     ],
     "openai": [
         "gpt-4o", "gpt-4o-mini", "gpt-4-turbo",
@@ -125,15 +144,16 @@ DEFAULT_CONFIG = {
         "gemini": {"api_key": "", "enabled": True},
         "openai": {"api_key": "", "enabled": False},
         "anthropic": {"api_key": "", "enabled": False},
+        "github": {"api_key": "", "enabled": False},
         "openai_compatible": {
             "api_key": "", "base_url": "", "label": "Custom", "enabled": False
         },
     },
     "cortex_map": {
-        "fast": {"provider": "gemini", "model": "gemini-2.5-flash-lite"},
-        "reason": {"provider": "gemini", "model": "gemini-2.5-flash"},
-        "create": {"provider": "gemini", "model": "gemini-2.0-flash"},
-        "visual": {"provider": "gemini", "model": "gemini-2.5-flash-image"},
+        "fast": {"provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
+        "reason": {"provider": "gemini", "model": "gemini-3.1-pro-preview"},
+        "create": {"provider": "gemini", "model": "gemini-3-flash-preview"},
+        "visual": {"provider": "gemini", "model": "gemini-3.1-flash-image-preview"},
     },
 }
 
@@ -305,7 +325,7 @@ class NeuralCortex:
         provider_type = mapping.get("provider", "gemini")
         model = mapping.get(
             "model",
-            CORTEX_MODELS.get(cortex_id, {}).get("model", "gemini-2.0-flash"),
+            CORTEX_MODELS.get(cortex_id, {}).get("model", "gemini-3-flash-preview"),
         )
         client = self._get_provider_client(provider_type)
         return provider_type, model, client
@@ -366,8 +386,8 @@ class NeuralCortex:
         except Exception as e:
             error_msg = str(e)
             if "not found" in error_msg.lower() or "invalid" in error_msg.lower():
-                # Model name is bad — try fallback to gemini-2.0-flash
-                print(f"[CORTEX] Model '{model}' failed ({error_msg}), falling back to gemini-2.0-flash")
+                # Model name is bad — try fallback to gemini-3-flash-preview
+                print(f"[CORTEX] Model '{model}' failed ({error_msg}), falling back to gemini-3-flash-preview")
                 if provider_type == "gemini":
                     gen_cfg = types.GenerateContentConfig(
                         temperature=temperature, max_output_tokens=max_tokens,
@@ -378,21 +398,22 @@ class NeuralCortex:
                             temperature=temperature, max_output_tokens=max_tokens,
                         )
                     r = client.models.generate_content(
-                        model="gemini-2.0-flash", config=gen_cfg, contents=prompt
+                        model="gemini-3-flash-preview", config=gen_cfg, contents=prompt
                     )
                     return r.text
             raise
 
     def classify(self, task_text):
-        """Route task to the right cortex. Fast pattern match first, then LLM."""
+        """Route task to the right cortex. Fast pattern match first, then TOP model."""
         lower = task_text.lower().strip()
 
         for pattern, cortex in FAST_PATTERNS:
             if re.search(pattern, lower):
                 return cortex
 
+        # Use REASON cortex (top model) for intelligent classification
         try:
-            provider_type, model, client = self._resolve_cortex("fast")
+            provider_type, model, client = self._resolve_cortex("reason")
             result = self._unified_generate(
                 provider_type, client, model,
                 (
@@ -573,12 +594,14 @@ PLATFORM: Windows 11 — use Windows commands (type, dir, python, etc.)
 NEURAL CAPABILITIES:
 You have access to multiple AI cortices that activate automatically:
 - ⚡ Fast Cortex: quick decisions, classification
-- 🧠 Reasoning Cortex: deep analysis, debugging, architecture
+- 🧠 Reasoning Cortex (Gemini 3.1 Pro): deep analysis, architecture, agent assignment
 - 🎨 Creative Cortex: code generation, creative solutions
 - 👁 Visual Cortex: image generation, UI mockups, diagrams
 
 YOU CAN: Install packages, create scripts, run any tests, use any tools.
 YOU CAN: Generate images using the "image" action for UI mockups, diagrams, logos.
+YOU CAN: Browse the web using the "browse" action to fetch documentation, APIs, latest tech.
+YOU CAN: Use GitHub API using the "github" action to clone repos, create PRs, manage issues.
 
 RESPOND WITH ONLY JSON (no markdown fences):
 {{
@@ -589,6 +612,11 @@ RESPOND WITH ONLY JSON (no markdown fences):
     {{"type": "file", "path": "path", "content": "full content"}},
     {{"type": "script", "name": "test.py", "lang": "python", "content": "code"}},
     {{"type": "image", "prompt": "description of image to generate", "save_as": "output.png"}},
+    {{"type": "browse", "url": "https://example.com/api/docs"}},
+    {{"type": "github", "operation": "clone", "repo_url": "https://github.com/user/repo"}},
+    {{"type": "github", "operation": "create_repo", "name": "my-project", "description": "desc"}},
+    {{"type": "github", "operation": "create_pr", "repo": "user/repo", "title": "PR title", "head": "feature", "base": "main"}},
+    {{"type": "github", "operation": "list_issues", "repo": "user/repo"}},
     {{"type": "self_modify", "reason": "why", "files": [{{"path": "agent_ui.py", "content": "new code"}}]}},
     {{"type": "done", "summary": "project summary"}}
   ]
@@ -600,13 +628,12 @@ ACTION TYPES:
 - "script": Create temp script, run it, get output, auto-cleanup
   Supported langs: python, node, bat, powershell
 - "image": Generate an image using AI Visual Cortex
-  Provide a detailed prompt and save_as filename (png/jpg/webp)
-  The generated image is saved to workspace and shown in the UI
+- "browse": Fetch a URL and read its content (web docs, APIs, latest tech updates)
+  Use this to research libraries, check docs, crawl for latest technology updates
+- "github": Interact with GitHub API
+  Operations: clone, push, create_repo, create_pr, list_issues, get_repo
 - "message": Send text to Developer (exactly ONE per response)
-- "self_modify": Modify the SYNAPSE system's own code (agent_ui.py, templates/index.html, etc.)
-  The launcher will safely: backup → validate → clone-test → swap → restart.
-  Use this when asked to improve the UI, add features to SYNAPSE itself, or evolve.
-  Files paths are relative to project root (e.g. "agent_ui.py", "templates/index.html").
+- "self_modify": Modify SYNAPSE's own code. Launcher handles backup → validate → clone-test → swap → restart.
 - "done": Signal project completion
 
 RULES:
@@ -614,6 +641,7 @@ RULES:
 2. Include FULL file contents in instructions
 3. Verify with automated tests before signaling done
 4. NEVER ask Developer to show file contents or do trivial changes
+5. Use "browse" to look up docs/APIs when building unfamiliar features
 """
 
 DEVELOPER_PROMPT = """\
@@ -633,12 +661,14 @@ PLATFORM: Windows 11 — use Windows commands (type, dir, python, etc.)
 NEURAL CAPABILITIES:
 You have access to multiple AI cortices:
 - ⚡ Fast Cortex: quick checks, simple operations
-- 🧠 Reasoning Cortex: debugging complex issues
+- 🧠 Reasoning Cortex (Gemini 3.1 Pro): debugging complex issues, deep analysis
 - 🎨 Creative Cortex: writing code, creative solutions
 - 👁 Visual Cortex: generating images for the project
 
 YOU CAN: Install ANY packages, create ANY scripts, use ANY tools.
 YOU CAN: Generate images using the "image" action for assets, mockups, testing.
+YOU CAN: Browse the web using the "browse" action to check docs, download APIs, research.
+YOU CAN: Use GitHub API using the "github" action to clone repos, push code, manage issues.
 When building a website: also test with Playwright/Selenium if possible.
 When building an API: also test with requests/httpx.
 When building a CLI: also test with sample inputs.
@@ -651,6 +681,8 @@ RESPOND WITH ONLY JSON (no markdown fences):
     {{"type": "file", "path": "path", "content": "full content"}},
     {{"type": "script", "name": "test.py", "lang": "python", "content": "code"}},
     {{"type": "image", "prompt": "description of image", "save_as": "icon.png"}},
+    {{"type": "browse", "url": "https://docs.example.com/api"}},
+    {{"type": "github", "operation": "push", "message": "feat: add new feature", "branch": "main"}},
     {{"type": "self_modify", "reason": "why", "files": [{{"path": "templates/index.html", "content": "new code"}}]}},
     {{"type": "message", "content": "status report"}},
     {{"type": "done", "summary": "done summary"}}
@@ -663,10 +695,9 @@ ACTION TYPES:
 - "script": Create temp script, run it, auto-cleanup. For quick tests.
   Supported langs: python, node, bat, powershell
 - "image": Generate an image using the AI Visual Cortex
-  Provide detailed prompt and save_as filename. Saved to workspace.
-- "self_modify": Modify the SYNAPSE system's own code.
-  The launcher safely handles: backup → validate → clone-test → swap → restart.
-  File paths relative to project root: "agent_ui.py", "templates/index.html", etc.
+- "browse": Fetch a URL and read its content (docs, APIs, tech updates)
+- "github": Interact with GitHub (clone, push, create_repo, create_pr, list_issues, get_repo)
+- "self_modify": Modify SYNAPSE's own code. Launcher handles backup → validate → clone-test → swap → restart.
 - "message": Send text to Architect (exactly ONE per response)
 - "done": Signal completion
 
@@ -677,6 +708,7 @@ RULES:
 4. Test by running code after creating files
 5. Fix failures before reporting
 6. Always include a "message" action
+7. Use "browse" to look up docs when working with unfamiliar APIs
 """
 
 # ── JSON Parsing ─────────────────────────────────────────────────
@@ -874,16 +906,21 @@ class AgentEngine:
         system_prompt = (
             "You are a helpful AI with FULL access to a local Windows 11 machine.\n"
             "You can run ANY command, create ANY script, install ANY package.\n"
-            "You can generate IMAGES using the 'image' action.\n\n"
+            "You can generate IMAGES using the 'image' action.\n"
+            "You can BROWSE the web using the 'browse' action to fetch live data.\n"
+            "You can use GITHUB API using the 'github' action.\n\n"
             f"WORKSPACE: {self.workspace}\n\n"
             "RESPOND WITH ONLY JSON:\n"
             '{"thinking": "...", "actions": [\n'
             '  {"type": "command", "cmd": "..."},\n'
             '  {"type": "script", "name": "x.py", "lang": "python", "content": "..."},\n'
             '  {"type": "image", "prompt": "detailed description", "save_as": "file.png"},\n'
+            '  {"type": "browse", "url": "https://example.com"},\n'
+            '  {"type": "github", "operation": "list_issues", "repo": "user/repo"},\n'
             '  {"type": "answer", "content": "final answer to user"}\n'
             "]}\n\n"
             "ALWAYS end with an 'answer' action. Use scripts/commands for live data.\n"
+            "Use 'browse' action to fetch web pages, APIs, weather, news, etc.\n"
             "Use 'image' action if asked for visual content.\n"
             "Install packages first if needed (pip install requests)."
         )
@@ -926,6 +963,14 @@ class AgentEngine:
                             cmd_output += out + "\n"
                     elif atype == "image":
                         out = self._do_image(action, "system")
+                        if out:
+                            cmd_output += out + "\n"
+                    elif atype == "browse":
+                        out = self._do_browse(action, "system")
+                        if out:
+                            cmd_output += out + "\n"
+                    elif atype == "github":
+                        out = self._do_github(action, "system")
                         if out:
                             cmd_output += out + "\n"
                     elif atype == "answer":
@@ -1172,6 +1217,14 @@ class AgentEngine:
                     out = self._do_image(action, agent)
                     if out:
                         cmd_results.append(out)
+                elif atype == "browse":
+                    out = self._do_browse(action, agent)
+                    if out:
+                        cmd_results.append(out)
+                elif atype == "github":
+                    out = self._do_github(action, agent)
+                    if out:
+                        cmd_results.append(out)
                 elif atype == "message":
                     peer_message = action.get("content", "")
                 elif atype == "done":
@@ -1363,7 +1416,12 @@ class AgentEngine:
             return f"Image generation failed: {error}"
 
     def _do_self_modify(self, action, agent):
-        """Handle self-modification: write signal file for nexus.py launcher."""
+        """Handle self-modification: write signal file for synapse.py launcher."""
+        # Cloud Run: self-modification disabled (ephemeral containers)
+        if os.environ.get("SYNAPSE_CLOUD_MODE", "").strip() in ("1", "true"):
+            self.emit("error", {"agent": agent, "error": "Self-modification disabled in cloud mode"})
+            return "self_modify: disabled in cloud mode (ephemeral container)"
+
         files = action.get("files", [])
         reason = action.get("reason", "Agent-requested modification")
         if not files:
@@ -1413,6 +1471,143 @@ class AgentEngine:
             f"The SYNAPSE launcher will validate, clone-test, and swap the code.\n"
             f"The system will restart automatically."
         )
+
+    def _do_browse(self, action, agent):
+        """Fetch a URL and extract text content for the agent."""
+        url = action.get("url", "")
+        if not url:
+            return "browse: no URL provided"
+        self.emit("command_start", {"agent": agent, "cmd": f"🌐 browse {url}"})
+        try:
+            if not _requests_available:
+                # Auto-install requests if missing
+                subprocess.run(
+                    "pip install requests beautifulsoup4 --quiet",
+                    shell=True, cwd=self.workspace, timeout=60,
+                )
+                import requests as _req
+                from bs4 import BeautifulSoup as _bsoup
+            else:
+                _req = _requests
+                _bsoup = _BS
+
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                              "AppleWebKit/537.36 SYNAPSE-Agent/1.0"
+            }
+            resp = _req.get(url, headers=headers, timeout=30)
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "")
+
+            if "json" in content_type:
+                text = json.dumps(resp.json(), indent=2)[:8000]
+            elif "html" in content_type and _bsoup:
+                soup = _bsoup(resp.text, "html.parser")
+                # Remove scripts, styles, nav, etc.
+                for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+                    tag.decompose()
+                text = soup.get_text(separator="\n", strip=True)[:8000]
+            else:
+                text = resp.text[:8000]
+
+            self.emit("command_output", {
+                "agent": agent, "cmd": f"browse {url}",
+                "output": f"Fetched {len(text)} chars from {url}", "exit_code": 0,
+            })
+            self._log(f"[BROWSE] {url} → {len(text)} chars")
+            return f"Browse: {url}\n\n{text}"
+        except Exception as e:
+            self.emit("command_output", {
+                "agent": agent, "cmd": f"browse {url}",
+                "output": str(e), "exit_code": -1,
+            })
+            return f"Browse: {url}\nERROR: {e}"
+
+    def _do_github(self, action, agent):
+        """GitHub API operations: clone, push, create_repo, create_pr, list_issues."""
+        op = action.get("operation", "")
+        self.emit("command_start", {"agent": agent, "cmd": f"🐙 github {op}"})
+
+        # For git clone/push, use shell commands directly
+        if op == "clone":
+            repo_url = action.get("repo_url", "")
+            dest = action.get("dest", "")
+            cmd = f"git clone {repo_url}"
+            if dest:
+                cmd += f" {dest}"
+            return self._do_command({"cmd": cmd}, agent)
+
+        if op == "push":
+            remote = action.get("remote", "origin")
+            branch = action.get("branch", "main")
+            msg = action.get("message", "SYNAPSE auto-commit")
+            cmds = f'cd {self.workspace} && git add -A && git commit -m "{msg}" && git push {remote} {branch}'
+            return self._do_command({"cmd": cmds}, agent)
+
+        # For API operations, use PyGithub
+        token = self.config.get("providers", {}).get("github", {}).get("api_key", "")
+        if not token:
+            token = os.environ.get("GITHUB_TOKEN", "")
+        if not token:
+            return "github: no GITHUB_TOKEN configured (set in Settings or env var)"
+
+        try:
+            if not _github_available:
+                subprocess.run(
+                    "pip install PyGithub --quiet",
+                    shell=True, cwd=self.workspace, timeout=60,
+                )
+                from github import Github as _GH
+            else:
+                _GH = _Github
+
+            g = _GH(token)
+
+            if op == "create_repo":
+                name = action.get("name", "")
+                desc = action.get("description", "")
+                private = action.get("private", False)
+                repo = g.get_user().create_repo(name, description=desc, private=private)
+                result = f"Created repo: {repo.html_url}"
+
+            elif op == "create_pr":
+                repo_name = action.get("repo", "")
+                title = action.get("title", "")
+                body = action.get("body", "")
+                head = action.get("head", "")
+                base = action.get("base", "main")
+                repo = g.get_repo(repo_name)
+                pr = repo.create_pull(title=title, body=body, head=head, base=base)
+                result = f"Created PR #{pr.number}: {pr.html_url}"
+
+            elif op == "list_issues":
+                repo_name = action.get("repo", "")
+                repo = g.get_repo(repo_name)
+                issues = list(repo.get_issues(state="open")[:10])
+                result = "\n".join(f"#{i.number}: {i.title}" for i in issues) or "No open issues"
+
+            elif op == "get_repo":
+                repo_name = action.get("repo", "")
+                repo = g.get_repo(repo_name)
+                result = (f"Repo: {repo.full_name}\n"
+                          f"Stars: {repo.stargazers_count}\n"
+                          f"Description: {repo.description}\n"
+                          f"URL: {repo.html_url}")
+            else:
+                result = f"Unknown github operation: {op}"
+
+            self.emit("command_output", {
+                "agent": agent, "cmd": f"github {op}",
+                "output": result, "exit_code": 0,
+            })
+            self._log(f"[GITHUB] {op} → {result}")
+            return f"GitHub {op}: {result}"
+        except Exception as e:
+            self.emit("command_output", {
+                "agent": agent, "cmd": f"github {op}",
+                "output": str(e), "exit_code": -1,
+            })
+            return f"GitHub {op}: ERROR: {e}"
 
     def _cleanup(self):
         project = set(
@@ -1503,7 +1698,18 @@ class TerminalManager:
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.urandom(24).hex()
-socketio = SocketIO(app, async_mode="threading", cors_allowed_origins="*")
+
+# Cloud Run: use eventlet async_mode when available, fallback to threading
+_cloud_mode = os.environ.get("SYNAPSE_CLOUD_MODE", "").strip() in ("1", "true")
+_async_mode = "eventlet" if _cloud_mode else "threading"
+try:
+    if _cloud_mode:
+        import eventlet
+        eventlet.monkey_patch()
+except ImportError:
+    _async_mode = "threading"
+
+socketio = SocketIO(app, async_mode=_async_mode, cors_allowed_origins="*")
 
 # Per-session task pools: sid → {task_id → AgentEngine}
 task_pools = {}
@@ -1728,16 +1934,42 @@ def get_models():
     return json.dumps(PROVIDER_MODELS)
 
 
+# ── Module-level init for gunicorn (Cloud Run) ──────────────────
+
+def _init_app_from_env():
+    """Initialize app config from env vars when imported by gunicorn."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    config = load_config(base_dir)
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if api_key:
+        config["providers"]["gemini"]["api_key"] = api_key
+        config["providers"]["gemini"]["enabled"] = True
+    gh_token = os.environ.get("GITHUB_TOKEN", "")
+    if gh_token:
+        if "github" not in config["providers"]:
+            config["providers"]["github"] = {"api_key": "", "enabled": False}
+        config["providers"]["github"]["api_key"] = gh_token
+        config["providers"]["github"]["enabled"] = True
+    workspace = os.path.abspath(os.environ.get("WORKSPACE", "./workspace"))
+    os.makedirs(workspace, exist_ok=True)
+    app.config["SYNAPSE_CONFIG"] = config
+    app.config["WORKSPACE"] = workspace
+
+# Auto-init when loaded by gunicorn
+if "SYNAPSE_CONFIG" not in app.config:
+    _init_app_from_env()
+
+
 # ── Entry Point ──────────────────────────────────────────────────
 
 def main():
     global term_mgr
 
     parser = argparse.ArgumentParser(description="SYNAPSE — Neural Multi-Agent AI System")
-    parser.add_argument("--workspace", default="./workspace")
-    parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--workspace", default=os.environ.get("WORKSPACE", "./workspace"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8080)))
     parser.add_argument("--api-key", default=None)
-    parser.add_argument("--model", default="gemini-2.0-flash")
+    parser.add_argument("--model", default="gemini-3-flash-preview")
     args = parser.parse_args()
 
     workspace = os.path.abspath(args.workspace)
@@ -1753,6 +1985,14 @@ def main():
         config["providers"]["gemini"]["api_key"] = api_key
         config["providers"]["gemini"]["enabled"] = True
         save_config(config, base_dir)
+
+    # GitHub token from env
+    gh_token = os.environ.get("GITHUB_TOKEN", "")
+    if gh_token:
+        if "github" not in config["providers"]:
+            config["providers"]["github"] = {"api_key": "", "enabled": False}
+        config["providers"]["github"]["api_key"] = gh_token
+        config["providers"]["github"]["enabled"] = True
 
     has_any_key = any(
         p.get("api_key") and p.get("enabled")
