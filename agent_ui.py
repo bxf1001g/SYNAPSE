@@ -3009,37 +3009,48 @@ _tg_event_queue = []         # Events waiting to be sent
 
 
 def _tg_http(method, url, payload=None, timeout=8):
-    """HTTP request via subprocess+curl in eventlet.tpool.
+    """HTTP request via subprocess.Popen+curl with non-blocking wait.
 
     Runs curl in a completely separate process with its own network stack,
-    completely bypassing eventlet's monkey-patched socket/ssl modules.
-    tpool.execute prevents the subprocess from blocking the event loop.
+    bypassing eventlet's monkey-patched socket/ssl.  Uses Popen + poll()
+    loop with eventlet.sleep() to yield to the event loop while waiting.
     """
     import subprocess
 
-    def _do_curl():
+    try:
         cmd = ["curl", "-sS", "--connect-timeout", "5",
                "--max-time", str(timeout), "-X", method.upper()]
         if payload:
             cmd += ["-H", "Content-Type: application/json",
                     "-d", json.dumps(payload)]
         cmd.append(url)
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout + 5
+
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
-        if result.returncode != 0:
-            err = (result.stderr or "unknown error")[:200]
-            return {"status": 0, "error": f"curl exit {result.returncode}: {err}"}
-        body = json.loads(result.stdout)
+
+        # Poll loop: yield to eventlet while curl runs
+        deadline = time.time() + timeout + 5
+        while proc.poll() is None:
+            if time.time() > deadline:
+                proc.kill()
+                return {"status": 0, "error": "curl timeout (poll deadline)"}
+            try:
+                socketio.sleep(0.2)
+            except Exception:
+                time.sleep(0.2)
+
+        stdout = proc.stdout.read()
+        stderr = proc.stderr.read()
+        proc.stdout.close()
+        proc.stderr.close()
+
+        if proc.returncode != 0:
+            err = (stderr.decode(errors="replace") or "unknown")[:200]
+            return {"status": 0, "error": f"curl exit {proc.returncode}: {err}"}
+        body = json.loads(stdout)
         status = 200 if body.get("ok") else 400
         return {"status": status, "data": body}
-
-    try:
-        try:
-            import eventlet.tpool
-            return eventlet.tpool.execute(_do_curl)
-        except ImportError:
-            return _do_curl()
     except Exception as exc:
         return {"status": 0, "error": f"{type(exc).__name__}: {exc}"}
 
