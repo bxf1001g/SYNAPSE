@@ -3009,36 +3009,26 @@ _tg_event_queue = []         # Events waiting to be sent
 
 
 def _tg_http(method, url, payload=None, timeout=8):
-    """Make HTTP request via subprocess+curl to bypass eventlet patches.
+    """Make HTTP request via requests lib in a tpool thread.
 
-    Uses eventlet.tpool.execute to run the blocking subprocess.run call
-    in a real OS thread, preventing it from blocking the event loop.
+    eventlet.tpool.execute runs the callable in a real OS thread where
+    blocking I/O works normally, preventing event-loop stalls.
     """
-    import subprocess
+    import requests as _requests
 
-    def _do_curl():
-        cmd = ["curl", "-s", "-X", method, "--max-time", str(timeout)]
-        if payload:
-            cmd += ["-H", "Content-Type: application/json",
-                    "-d", json.dumps(payload)]
-        cmd.append(url)
-        return subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout + 5
-        )
+    def _do():
+        if method.upper() == "GET":
+            r = _requests.get(url, timeout=timeout)
+        else:
+            r = _requests.post(url, json=payload, timeout=timeout)
+        return {"status": r.status_code, "data": r.json()}
 
     try:
-        # tpool.execute runs in a real OS thread — doesn't block eventlet
         try:
             import eventlet.tpool
-            result = eventlet.tpool.execute(_do_curl)
+            return eventlet.tpool.execute(_do)
         except ImportError:
-            result = _do_curl()
-        if result.returncode != 0:
-            return {"status": 0,
-                    "error": f"curl exit {result.returncode}: {result.stderr[:200]}"}
-        body = json.loads(result.stdout)
-        status = 200 if body.get("ok") else 400
-        return {"status": status, "data": body}
+            return _do()
     except Exception as exc:
         return {"status": 0, "error": f"{type(exc).__name__}: {exc}"}
 
@@ -3054,7 +3044,7 @@ def _tg_send(text, parse_mode=None):
         result = _tg_http(
             "POST",
             f"https://api.telegram.org/bot{_TG_TOKEN}/sendMessage",
-            payload, timeout=15,
+            payload, timeout=10,
         )
         ok = result.get("status") == 200 and result.get(
             "data", {}
