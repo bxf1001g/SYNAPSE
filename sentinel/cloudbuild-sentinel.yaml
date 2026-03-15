@@ -1,0 +1,38 @@
+# cloudbuild-sentinel.yaml — Deploy SYNAPSE Sentinel to Cloud Run
+
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/synapse-sentinel', '-f', 'sentinel/Dockerfile', 'sentinel/']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/synapse-sentinel']
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        gcloud run deploy synapse-sentinel \
+          --image=gcr.io/$PROJECT_ID/synapse-sentinel \
+          --region=${_REGION} \
+          --platform=managed \
+          --allow-unauthenticated \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=1 \
+          --max-instances=1 \
+          --startup-probe httpGet.path=/health \
+          --set-env-vars=SYNAPSE_CLOUD_MODE=1,MAIN_URL=${_MAIN_URL},GCP_PROJECT=$PROJECT_ID,GCP_REGION=${_REGION},GEMINI_API_KEY=${_GEMINI_API_KEY},GITHUB_TOKEN=${_GITHUB_TOKEN},MAIN_SERVICE=synapse
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _REGION: us-central1
+  _MAIN_URL: 'https://synapse-521577931248.us-central1.run.app'
+  _GEMINI_API_KEY: ''
+  _GITHUB_TOKEN: ''
+
+images:
+  - 'gcr.io/$PROJECT_ID/synapse-sentinel'

@@ -4259,6 +4259,21 @@ def trigger_healing():
     return json.dumps({"status": "healing_triggered", "errors_queued": len(_error_log)})
 
 
+@app.route("/api/healing/inject", methods=["POST"])
+def inject_test_error():
+    """Inject a test error into the error log (for Sentinel testing)."""
+    data = request.get_json(silent=True) or {}
+    cat = data.get("category", "test")
+    msg = data.get("message", "Injected test error")
+    count = min(int(data.get("count", 1)), 20)
+    for _ in range(count):
+        _log_error(cat, msg)
+    return json.dumps({
+        "injected": count,
+        "total_errors": len(_error_log),
+    }), 200, {"Content-Type": "application/json"}
+
+
 # Auto-start deferred to first HTTP request (see _boot_background_tasks)
 # if _cloud_mode:
 #     _start_healing_loop()

@@ -1,0 +1,6 @@
+flask==3.1.1
+gunicorn==23.0.0
+requests==2.32.3
+google-genai==1.14.0
+google-cloud-build==3.28.0
+google-cloud-run==0.10.14
