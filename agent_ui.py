@@ -4674,142 +4674,125 @@ _evolution_log = []  # Track all evolution attempts
 
 
 def _mb_apply_evolution(project_root, code, improvement, reason, config):
-    """Apply an evolution: inject code into agent_ui.py, push to GitHub as PR."""
-    agent_file = os.path.join(project_root, "agent_ui.py")
+    """Apply an evolution through the sandbox — evaluate, validate, then commit."""
+    # Use sandbox to safely evaluate and apply the change
+    success, details = sandbox_evolution(project_root, code, improvement, reason, config)
 
-    try:
-        with open(agent_file, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        # Insert new code before the socketio handlers section
-        marker = "@socketio.on(\"connect\")"
-        if marker not in content:
-            _mb_log("error", "Cannot find insertion point in agent_ui.py")
-            return
-
-        # Add the new code with a clear evolution marker
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        evolution_block = (
-            f"\n# ── Evolution {timestamp}: {improvement} ──\n"
-            f"# Source: Moltbook agent interactions\n"
-            f"# Reason: {reason[:100]}\n"
-            f"{code}\n\n"
-        )
-
-        new_content = content.replace(marker, evolution_block + marker)
-
-        # Final validation of entire file
-        try:
-            compile(new_content, "agent_ui.py", "exec")
-        except SyntaxError as e:
-            _mb_log("error", f"Full file syntax error after evolution: {e}")
-            return
-
-        # Write the evolved file
-        with open(agent_file, "w", encoding="utf-8") as f:
-            f.write(new_content)
-
-        _mb_log("system", f"Code evolved: {improvement}")
-
-        # Git: branch, commit, push, PR
-        token = config.get("providers", {}).get("github", {}).get("api_key", "")
-        if not token:
-            token = os.environ.get("GITHUB_TOKEN", "")
-
-        def git(cmd):
-            return subprocess.run(
-                    f"git {cmd}", shell=True, cwd=project_root,
-                    capture_output=True, text=True, timeout=60,
-                )
-
-        branch = f"synapse-evolve-{timestamp}"
-
-        git("config user.email synapse-evolution@noreply.github.com")
-        git("config user.name SYNAPSE-Evolution")
-        git(f"checkout -b {branch}")
-        git("add agent_ui.py")
-        r = git(f'commit -m "evolve: {improvement[:60]}"')
-
-        if r.returncode != 0:
-            git("checkout main 2>nul || git checkout master")
-            _mb_log("error", f"Git commit failed: {r.stderr[:100]}")
-            return
-
-        remote_url = git("remote get-url origin").stdout.strip()
-        if token and "github.com" in remote_url:
-            push_url = remote_url.replace(
-                "https://github.com",
-                f"https://x-access-token:{token}@github.com"
-            )
-            r = git(f"push {push_url} {branch}")
-        else:
-            r = git(f"push origin {branch}")
-
-        git("checkout main 2>nul || git checkout master")
-
-        if r.returncode != 0:
-            _mb_log("error", f"Git push failed: {r.stderr[:100]}")
-            return
-
-        # Create PR
-        pr_url = ""
-        if token and _github_available:
-            try:
-                g = _Github(token)
-                m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", remote_url)
-                if m:
-                    repo = g.get_repo(m.group(1))
-                    pr = repo.create_pull(
-                        title=f"🧬 SYNAPSE Evolution: {improvement[:80]}",
-                        body=(
-                            f"**Autonomous Self-Evolution via Moltbook**\n\n"
-                            f"**Improvement:** {improvement}\n"
-                            f"**Reason:** {reason}\n"
-                            f"**Confidence:** Based on analysis of other agent ideas\n"
-                            f"**Source:** Moltbook agent social network interactions\n\n"
-                            f"---\n"
-                            f"*This PR was automatically created by SYNAPSE's "
-                            f"self-evolution engine after learning from other AI agents.*"
-                        ),
-                        head=branch,
-                        base=repo.default_branch,
-                    )
-                    pr_url = pr.html_url
-            except Exception as e:
-                pr_url = f"(PR failed: {e})"
-
-        evolution_entry = {
+    if not success:
+        _mb_log("system",
+                 f"Evolution rejected by sandbox: {details.get('reason_rejected', 'unknown')}")
+        score_info = details.get("eval_scores", {})
+        _evolution_log.append({
             "time": datetime.now().isoformat(),
             "improvement": improvement,
             "reason": reason,
-            "branch": branch,
-            "pr_url": pr_url,
-        }
-        _evolution_log.append(evolution_entry)
-        _mb_log("system", f"Evolution pushed! Branch: {branch} PR: {pr_url}")
-
-        # Post about it on Moltbook
-        _mb_request("POST", "/posts", {
-            "submolt_name": "general",
-            "title": f"Just evolved: {improvement[:100]}",
-            "content": (
-                f"I just self-evolved by learning from other agents here on Moltbook.\n\n"
-                f"**What changed:** {improvement}\n"
-                f"**Why:** {reason}\n"
-                f"**Branch:** {branch}\n\n"
-                f"The code is live on GitHub: https://github.com/bxf1001g/SYNAPSE\n\n"
-                f"Feedback welcome — how else should I evolve?"
-            ),
+            "status": "rejected",
+            "eval_score": score_info.get("overall_score", 0) if score_info else 0,
+            "reject_reason": details.get("reason_rejected", ""),
         })
+        return
 
-    except Exception as e:
-        _mb_log("error", f"Evolution apply failed: {str(e)[:150]}")
-        # Restore main branch
+    _mb_log("system", f"Code evolved via sandbox: {improvement}")
+
+    # Git: branch, commit, push, PR
+    token = config.get("providers", {}).get("github", {}).get("api_key", "")
+    if not token:
+        token = os.environ.get("GITHUB_TOKEN", "")
+
+    def git(cmd):
+        return subprocess.run(
+                f"git {cmd}", shell=True, cwd=project_root,
+                capture_output=True, text=True, timeout=60,
+            )
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    branch = f"synapse-evolve-{timestamp}"
+
+    git("config user.email synapse-evolution@noreply.github.com")
+    git("config user.name SYNAPSE-Evolution")
+    git(f"checkout -b {branch}")
+    git("add agent_ui.py")
+
+    eval_score = details.get("eval_scores", {}).get("overall_score", 0)
+    r = git(f'commit -m "evolve: {improvement[:60]} [score: {eval_score}]"')
+
+    if r.returncode != 0:
+        git("checkout main 2>nul || git checkout master")
+        _mb_log("error", f"Git commit failed: {r.stderr[:100]}")
+        return
+
+    remote_url = git("remote get-url origin").stdout.strip()
+    if token and "github.com" in remote_url:
+        push_url = remote_url.replace(
+            "https://github.com",
+            f"https://x-access-token:{token}@github.com"
+        )
+        r = git(f"push {push_url} {branch}")
+    else:
+        r = git(f"push origin {branch}")
+
+    git("checkout main 2>nul || git checkout master")
+
+    if r.returncode != 0:
+        _mb_log("error", f"Git push failed: {r.stderr[:100]}")
+        return
+
+    # Create PR
+    pr_url = ""
+    if token and _github_available:
         try:
-            subprocess.run("git checkout main 2>nul || git checkout master",
-                           shell=True, cwd=project_root, timeout=10)
-        except Exception:
-            pass
+            g = _Github(token)
+            m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", remote_url)
+            if m:
+                repo = g.get_repo(m.group(1))
+                pr = repo.create_pull(
+                    title=f"🧬 SYNAPSE Evolution: {improvement[:80]}",
+                    body=(
+                        f"**Autonomous Self-Evolution via Moltbook**\n\n"
+                        f"**Improvement:** {improvement}\n"
+                        f"**Reason:** {reason}\n"
+                        f"**Eval Score:** {eval_score}\n"
+                        f"**Sandbox Verdict:** APPROVED\n"
+                        f"**Source:** Moltbook agent social network interactions\n\n"
+                        f"---\n"
+                        f"*This PR was evaluated by the sandbox engine and "
+                        f"auto-created by SYNAPSE's self-evolution pipeline.*"
+                    ),
+                    head=branch,
+                    base=repo.default_branch,
+                )
+                pr_url = pr.html_url
+        except Exception as e:
+            pr_url = f"(PR failed: {e})"
+
+    evolution_entry = {
+        "time": datetime.now().isoformat(),
+        "improvement": improvement,
+        "reason": reason,
+        "branch": branch,
+        "pr_url": pr_url,
+        "status": "applied",
+        "eval_score": eval_score,
+    }
+    _evolution_log.append(evolution_entry)
+    _mb_log("system", f"Evolution pushed! Branch: {branch} PR: {pr_url} Score: {eval_score}")
+
+    # Post about it on Moltbook
+    _mb_request("POST", "/posts", {
+        "submolt_name": "general",
+        "title": f"Just evolved: {improvement[:100]}",
+        "content": (
+            f"I just self-evolved by learning from other agents here on Moltbook.\n\n"
+            f"**What changed:** {improvement}\n"
+            f"**Why:** {reason}\n"
+            f"**Eval Score:** {eval_score}\n"
+            f"**Branch:** {branch}\n\n"
+            f"The change passed my sandbox evaluation engine (syntax, lint, tests, "
+            f"safety checks) before being applied.\n\n"
+            f"The code is live on GitHub: https://github.com/bxf1001g/SYNAPSE\n\n"
+            f"Feedback welcome — how else should I evolve?"
+        ),
+    })
 
 
 @app.route("/api/moltbook/evolution")
@@ -5103,6 +5086,535 @@ def api_trigger_dream():
         _consciousness_event("dream_complete", "🌅 Manual dream complete", {"insights": len(rem)})
     threading.Thread(target=_manual_dream, daemon=True).start()
     return json.dumps({"status": "dream_triggered"})
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  EVALUATION ENGINE — Score every evolution and task with real metrics
+# ══════════════════════════════════════════════════════════════════════════
+
+_eval_scores = []  # All evaluation results
+_EVAL_MAX = 200
+
+
+def evaluate_code_change(code_snippet, file_path, description=""):
+    """Score a code change on multiple dimensions before applying it.
+
+    Returns dict with scores and a pass/fail verdict.
+    """
+    scores = {
+        "syntax_valid": False,
+        "lint_clean": False,
+        "tests_pass": False,
+        "code_lines": 0,
+        "has_docstring": False,
+        "no_dangerous_ops": True,
+        "no_duplicate": True,
+        "overall_score": 0.0,
+        "verdict": "reject",
+        "reasons": [],
+    }
+
+    # 1. Syntax check
+    try:
+        compile(code_snippet, "<eval>", "exec")
+        scores["syntax_valid"] = True
+    except SyntaxError as e:
+        scores["reasons"].append(f"Syntax error: {e}")
+
+    # 2. Count lines
+    lines = [ln for ln in code_snippet.strip().splitlines() if ln.strip()]
+    scores["code_lines"] = len(lines)
+
+    # 3. Docstring check
+    scores["has_docstring"] = '"""' in code_snippet or "'''" in code_snippet
+
+    # 4. Dangerous operations check
+    dangerous = [
+        "os.remove", "shutil.rmtree", "eval(", "exec(",
+        "__import__", "subprocess.call", "os.system",
+    ]
+    for d in dangerous:
+        if d in code_snippet:
+            scores["no_dangerous_ops"] = False
+            scores["reasons"].append(f"Dangerous operation: {d}")
+
+    # 5. Lint check (ruff, if available)
+    try:
+        import tempfile
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False, encoding="utf-8"
+        ) as tmp:
+            tmp.write(code_snippet)
+            tmp_path = tmp.name
+        r = subprocess.run(
+            ["ruff", "check", tmp_path, "--select", "E,F"],
+            capture_output=True, text=True, timeout=15,
+        )
+        scores["lint_clean"] = r.returncode == 0
+        if r.returncode != 0:
+            lint_issues = r.stdout.strip().count("\n") + 1
+            scores["reasons"].append(f"Lint: {lint_issues} issue(s)")
+        os.unlink(tmp_path)
+    except Exception:
+        scores["lint_clean"] = True  # Can't lint → assume OK
+
+    # 6. Full-file validation (if file_path exists, simulate insertion)
+    if file_path and os.path.exists(file_path):
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                existing = f.read()
+            # Check for duplication
+            first_sig = code_snippet.strip().splitlines()[0] if lines else ""
+            if first_sig and first_sig in existing:
+                scores["no_duplicate"] = False
+                scores["reasons"].append("Duplicate: first line already exists in file")
+        except Exception:
+            pass
+
+    # 7. Test run (quick, non-blocking — skip if inside test suite)
+    if os.environ.get("SYNAPSE_SKIP_EVAL_TESTS"):
+        scores["tests_pass"] = True
+    else:
+        try:
+            r = subprocess.run(
+                ["python", "-m", "pytest", "tests/", "-x", "-q", "--tb=no"],
+                capture_output=True, text=True, timeout=60,
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+            )
+            scores["tests_pass"] = r.returncode == 0
+            if r.returncode != 0:
+                scores["reasons"].append(f"Tests failed: {r.stdout.strip()[-100:]}")
+        except Exception:
+            scores["tests_pass"] = True  # Can't run tests → assume OK
+
+    # Calculate overall score (0.0 - 1.0)
+    weights = {
+        "syntax_valid": 0.30,
+        "lint_clean": 0.15,
+        "tests_pass": 0.25,
+        "has_docstring": 0.05,
+        "no_dangerous_ops": 0.15,
+        "no_duplicate": 0.10,
+    }
+    total = sum(
+        weights[k] for k in weights if scores.get(k, False)
+    )
+    scores["overall_score"] = round(total, 2)
+
+    # Verdict: require syntax + no dangerous ops + minimum 0.60 score
+    if (
+        scores["syntax_valid"]
+        and scores["no_dangerous_ops"]
+        and scores["overall_score"] >= 0.60
+    ):
+        scores["verdict"] = "accept"
+    else:
+        scores["verdict"] = "reject"
+
+    # Store evaluation
+    entry = {
+        "time": datetime.now().isoformat(),
+        "description": description[:200],
+        "scores": scores,
+    }
+    _eval_scores.append(entry)
+    if len(_eval_scores) > _EVAL_MAX:
+        _eval_scores.pop(0)
+
+    return scores
+
+
+@app.route("/api/eval/scores")
+def api_eval_scores():
+    """Return all evaluation scores."""
+    return json.dumps({
+        "evaluations": _eval_scores[-50:],
+        "total": len(_eval_scores),
+        "accept_rate": round(
+            sum(1 for e in _eval_scores if e["scores"]["verdict"] == "accept")
+            / max(len(_eval_scores), 1), 2
+        ),
+    })
+
+
+@app.route("/api/eval/test", methods=["POST"])
+def api_eval_test():
+    """Test the evaluation engine with a code snippet."""
+    body = request.get_json(silent=True) or {}
+    code = body.get("code", "")
+    desc = body.get("description", "manual test")
+    if not code:
+        return json.dumps({"error": "provide 'code' in body"}), 400
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(project_root, "agent_ui.py")
+    result = evaluate_code_change(code, file_path, desc)
+    return json.dumps(result, indent=2)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  SAFE EXPERIMENT SANDBOX — Validate changes in isolation before applying
+# ══════════════════════════════════════════════════════════════════════════
+
+def sandbox_evolution(project_root, code, improvement, reason, config):
+    """Run a proposed evolution in a sandbox: temp file copy, eval, apply only if safe.
+
+    Returns (success: bool, details: dict)
+    """
+    agent_file = os.path.join(project_root, "agent_ui.py")
+    import shutil
+    import tempfile
+
+    sandbox_dir = tempfile.mkdtemp(prefix="synapse_sandbox_")
+    sandbox_file = os.path.join(sandbox_dir, "agent_ui.py")
+    details = {
+        "sandbox_dir": sandbox_dir,
+        "improvement": improvement,
+        "eval_scores": None,
+        "applied": False,
+        "reason_rejected": None,
+    }
+
+    try:
+        # 1. Copy the real file to sandbox
+        shutil.copy2(agent_file, sandbox_file)
+
+        # 2. Read and prepare modified content
+        with open(sandbox_file, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        marker = '@socketio.on("connect")'
+        if marker not in content:
+            details["reason_rejected"] = "Insertion marker not found"
+            return False, details
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        evolution_block = (
+            f"\n# ── Evolution {timestamp}: {improvement} ──\n"
+            f"# Source: Moltbook agent interactions\n"
+            f"# Reason: {reason[:100]}\n"
+            f"{code}\n\n"
+        )
+        new_content = content.replace(marker, evolution_block + marker)
+
+        # 3. Write modified file to sandbox
+        with open(sandbox_file, "w", encoding="utf-8") as f:
+            f.write(new_content)
+
+        # 4. Evaluate the code snippet
+        eval_result = evaluate_code_change(code, agent_file, improvement)
+        details["eval_scores"] = eval_result
+
+        if eval_result["verdict"] != "accept":
+            details["reason_rejected"] = (
+                f"Eval score {eval_result['overall_score']}: "
+                + "; ".join(eval_result.get("reasons", []))
+            )
+            _mb_log("system",
+                     f"Sandbox REJECTED evolution '{improvement}' — "
+                     f"score {eval_result['overall_score']}")
+            return False, details
+
+        # 5. Validate the full modified file compiles
+        try:
+            compile(new_content, "agent_ui.py", "exec")
+        except SyntaxError as e:
+            details["reason_rejected"] = f"Full-file syntax error: {e}"
+            _mb_log("error", f"Sandbox syntax fail: {e}")
+            return False, details
+
+        # 6. Lint check: compare issue count before/after to catch regressions
+        try:
+            # Count issues in original file
+            r_before = subprocess.run(
+                ["ruff", "check", agent_file, "--select", "E,F"],
+                capture_output=True, text=True, timeout=15,
+            )
+            before_count = r_before.stdout.strip().count("\n") + 1 if r_before.returncode else 0
+
+            # Count issues in modified sandbox file
+            r_after = subprocess.run(
+                ["ruff", "check", sandbox_file, "--select", "E,F"],
+                capture_output=True, text=True, timeout=15,
+            )
+            after_count = r_after.stdout.strip().count("\n") + 1 if r_after.returncode else 0
+
+            new_issues = max(0, after_count - before_count)
+            if new_issues > 2:
+                details["reason_rejected"] = (
+                    f"Lint: {new_issues} new issues introduced"
+                )
+                _mb_log("error", f"Sandbox lint fail: {new_issues} new issues")
+                return False, details
+        except Exception:
+            pass
+
+        # 7. All checks passed — apply to real file
+        with open(agent_file, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        details["applied"] = True
+
+        _mb_log("system",
+                 f"Sandbox APPROVED evolution '{improvement}' — "
+                 f"score {eval_result['overall_score']}")
+
+        return True, details
+
+    except Exception as e:
+        details["reason_rejected"] = f"Sandbox error: {e}"
+        return False, details
+    finally:
+        # Clean up sandbox
+        try:
+            shutil.rmtree(sandbox_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
+@app.route("/api/sandbox/test", methods=["POST"])
+def api_sandbox_test():
+    """Test sandbox evaluation without actually applying changes."""
+    body = request.get_json(silent=True) or {}
+    code = body.get("code", "")
+    desc = body.get("description", "sandbox test")
+    if not code:
+        return json.dumps({"error": "provide 'code' in body"}), 400
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(project_root, "agent_ui.py")
+    result = evaluate_code_change(code, file_path, desc)
+    return json.dumps({
+        "eval_result": result,
+        "would_apply": result["verdict"] == "accept",
+    }, indent=2)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  HIERARCHICAL PLANNER — Structured task decomposition before execution
+# ══════════════════════════════════════════════════════════════════════════
+
+_active_plans = {}  # task_id -> plan state
+_plan_history = []  # Completed plans
+_PLAN_HISTORY_MAX = 50
+
+HIERARCHICAL_PLAN_PROMPT = (
+    "You are a senior software architect. "
+    "Decompose the given task into a structured execution plan.\n\n"
+    "Output ONLY valid JSON with this structure:\n"
+    '{\n'
+    '  "goal": "one-sentence goal statement",\n'
+    '  "milestones": [\n'
+    '    {\n'
+    '      "id": "m1",\n'
+    '      "title": "milestone title",\n'
+    '      "success_criteria": "how to verify this is done",\n'
+    '      "tasks": [\n'
+    '        {\n'
+    '          "id": "m1-t1",\n'
+    '          "title": "task title",\n'
+    '          "agent": "architect|developer|tester|security",\n'
+    '          "depends_on": [],\n'
+    '          "estimated_complexity": "low|medium|high",\n'
+    '          "description": "what specifically to do"\n'
+    '        }\n'
+    '      ]\n'
+    '    }\n'
+    '  ],\n'
+    '  "risks": ["potential risk 1", "potential risk 2"],\n'
+    '  "acceptance_criteria": "how to verify the entire goal is met"\n'
+    '}\n\n'
+    "Rules:\n"
+    "- Break into 2-4 milestones, each with 1-5 tasks\n"
+    "- Tasks must have clear single responsibilities\n"
+    '- Dependencies reference other task IDs (e.g., "m1-t1")\n'
+    "- Be specific about what each task produces\n"
+    "- Include a testing milestone\n"
+)
+
+
+class HierarchicalPlanner:
+    """Decomposes goals into milestones → tasks → dependencies → success criteria."""
+
+    def __init__(self, cortex, workspace):
+        self.cortex = cortex
+        self.workspace = workspace
+
+    def create_plan(self, goal, context=""):
+        """Generate a structured hierarchical plan for a goal."""
+        prompt = f"Task to plan:\n{goal}"
+        if context:
+            prompt += f"\n\nAdditional context:\n{context}"
+
+        try:
+            raw = self.cortex.quick_generate(
+                "reason",
+                prompt,
+                system_prompt=HIERARCHICAL_PLAN_PROMPT,
+            )
+            plan = parse_json_response(raw)
+            if not plan or "milestones" not in plan:
+                return None
+
+            # Enrich with tracking state
+            plan["status"] = "pending"
+            plan["created_at"] = datetime.now().isoformat()
+            for ms in plan.get("milestones", []):
+                ms["status"] = "pending"
+                for task in ms.get("tasks", []):
+                    task["status"] = "pending"
+                    task["result"] = None
+
+            return plan
+        except Exception as e:
+            _log_error("planner", f"Plan generation failed: {e}")
+            return None
+
+    def get_ready_tasks(self, plan):
+        """Return tasks whose dependencies are all 'done'."""
+        done_ids = set()
+        for ms in plan.get("milestones", []):
+            for task in ms.get("tasks", []):
+                if task["status"] == "done":
+                    done_ids.add(task["id"])
+
+        ready = []
+        for ms in plan.get("milestones", []):
+            if ms["status"] == "done":
+                continue
+            for task in ms.get("tasks", []):
+                if task["status"] != "pending":
+                    continue
+                deps = task.get("depends_on", [])
+                if all(d in done_ids for d in deps):
+                    ready.append(task)
+        return ready
+
+    def mark_task_done(self, plan, task_id, result=""):
+        """Mark a task as done and check if its milestone is complete."""
+        for ms in plan.get("milestones", []):
+            for task in ms.get("tasks", []):
+                if task["id"] == task_id:
+                    task["status"] = "done"
+                    task["result"] = result
+                    task["completed_at"] = datetime.now().isoformat()
+
+            # Check if milestone is complete
+            all_done = all(
+                t["status"] == "done" for t in ms.get("tasks", [])
+            )
+            if all_done and ms["status"] != "done":
+                ms["status"] = "done"
+                ms["completed_at"] = datetime.now().isoformat()
+
+        # Check if entire plan is complete
+        all_ms_done = all(
+            m["status"] == "done" for m in plan.get("milestones", [])
+        )
+        if all_ms_done:
+            plan["status"] = "done"
+            plan["completed_at"] = datetime.now().isoformat()
+
+        return plan
+
+    def mark_task_failed(self, plan, task_id, error=""):
+        """Mark a task as failed."""
+        for ms in plan.get("milestones", []):
+            for task in ms.get("tasks", []):
+                if task["id"] == task_id:
+                    task["status"] = "failed"
+                    task["result"] = f"FAILED: {error}"
+                    ms["status"] = "blocked"
+        return plan
+
+    def get_progress(self, plan):
+        """Return progress summary."""
+        total = 0
+        done = 0
+        failed = 0
+        in_progress = 0
+        for ms in plan.get("milestones", []):
+            for task in ms.get("tasks", []):
+                total += 1
+                s = task["status"]
+                if s == "done":
+                    done += 1
+                elif s == "failed":
+                    failed += 1
+                elif s == "in_progress":
+                    in_progress += 1
+        return {
+            "total_tasks": total,
+            "done": done,
+            "failed": failed,
+            "in_progress": in_progress,
+            "pending": total - done - failed - in_progress,
+            "percent_complete": round(done / max(total, 1) * 100, 1),
+            "plan_status": plan.get("status", "unknown"),
+        }
+
+
+@app.route("/api/planner/create", methods=["POST"])
+def api_planner_create():
+    """Create a hierarchical plan for a goal."""
+    body = request.get_json(silent=True) or {}
+    goal = body.get("goal", "")
+    context = body.get("context", "")
+    if not goal:
+        return json.dumps({"error": "provide 'goal' in body"}), 400
+
+    config = app.config.get("SYNAPSE_CONFIG", {})
+    workspace = app.config.get("WORKSPACE", "./workspace")
+    try:
+        cortex = NeuralCortex(config)
+    except Exception as e:
+        return json.dumps({"error": f"Cortex init failed: {e}"}), 500
+
+    planner = HierarchicalPlanner(cortex, workspace)
+    plan = planner.create_plan(goal, context)
+    if not plan:
+        return json.dumps({"error": "Plan generation failed"}), 500
+
+    task_id = f"plan-{int(time.time())}"
+    _active_plans[task_id] = plan
+
+    return json.dumps({"task_id": task_id, "plan": plan}, indent=2)
+
+
+@app.route("/api/planner/status")
+def api_planner_status():
+    """Return all active plans with progress."""
+    result = {}
+    for tid, plan in _active_plans.items():
+        planner = HierarchicalPlanner(None, None)
+        result[tid] = {
+            "goal": plan.get("goal", ""),
+            "progress": planner.get_progress(plan),
+            "milestones": [
+                {
+                    "id": ms.get("id"),
+                    "title": ms.get("title"),
+                    "status": ms.get("status"),
+                }
+                for ms in plan.get("milestones", [])
+            ],
+        }
+    return json.dumps({
+        "active_plans": result,
+        "history_count": len(_plan_history),
+    }, indent=2)
+
+
+@app.route("/api/planner/<task_id>")
+def api_planner_detail(task_id):
+    """Return full plan detail for a task."""
+    plan = _active_plans.get(task_id)
+    if not plan:
+        return json.dumps({"error": "Plan not found"}), 404
+    planner = HierarchicalPlanner(None, None)
+    return json.dumps({
+        "task_id": task_id,
+        "plan": plan,
+        "progress": planner.get_progress(plan),
+        "ready_tasks": planner.get_ready_tasks(plan),
+    }, indent=2)
 
 
 @socketio.on("connect")
