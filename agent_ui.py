@@ -3009,23 +3009,21 @@ _tg_event_queue = []         # Events waiting to be sent
 
 
 def _tg_http(method, url, payload=None, timeout=8):
-    """HTTP request using real (un-patched) sockets via eventlet.tpool.
+    """HTTP request using raw C-level sockets via eventlet.tpool.
 
-    eventlet monkey-patches socket/ssl, making them unreliable in green
-    threads.  We grab the *original* modules, build an HTTPSConnection
-    from them, and run the whole thing inside tpool so the event loop
-    never blocks.
+    eventlet monkey-patches socket/ssl at the Python level, but cannot
+    touch the C extension modules (_socket, _ssl).  We build the TCP
+    connection from _socket directly, wrap with real ssl, and run
+    everything inside tpool so the event loop never blocks.
     """
+    import _socket as _csock
     from urllib.parse import urlparse
 
     def _do():
-        # Get the REAL socket and ssl modules that eventlet stashed away
         try:
             from eventlet.patcher import original
-            _real_socket = original("socket")
             _real_ssl = original("ssl")
         except Exception:
-            import socket as _real_socket
             import ssl as _real_ssl
 
         parsed = urlparse(url)
@@ -3039,8 +3037,14 @@ def _tg_http(method, url, payload=None, timeout=8):
         if payload:
             body_bytes = json.dumps(payload).encode()
 
+        # Resolve hostname using C-level getaddrinfo
+        addrs = _csock.getaddrinfo(host, port, _csock.AF_INET, _csock.SOCK_STREAM)
+        # Create raw TCP socket from C extension (eventlet can't patch this)
+        raw_sock = _csock.socket(_csock.AF_INET, _csock.SOCK_STREAM)
+        raw_sock.settimeout(timeout)
+        raw_sock.connect(addrs[0][4])
+
         ctx = _real_ssl.create_default_context()
-        raw_sock = _real_socket.create_connection((host, port), timeout=timeout)
         conn = ctx.wrap_socket(raw_sock, server_hostname=host)
         try:
             req_line = f"{method.upper()} {path} HTTP/1.1\r\n"
