@@ -2776,13 +2776,19 @@ def _tg_http(method, url, payload=None, timeout=15):
             headers={"Content-Type": "application/json"} if data else {},
             method=method,
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read().decode("utf-8")
-            return {"status": resp.status, "data": json.loads(body)}
+        resp = urllib.request.urlopen(req, timeout=timeout)
+        body = resp.read().decode("utf-8")
+        resp.close()
+        return {"status": resp.status, "data": json.loads(body)}
     except urllib.error.HTTPError as e:
-        return {"status": e.code, "data": {}}
+        body_text = ""
+        try:
+            body_text = e.read().decode("utf-8", errors="replace")[:200]
+        except Exception:
+            pass
+        return {"status": e.code, "data": {}, "error": body_text}
     except Exception as exc:
-        return {"status": 0, "error": str(exc)}
+        return {"status": 0, "error": f"{type(exc).__name__}: {exc}"}
 
 
 def _tg_send(text, parse_mode=None):
@@ -2989,14 +2995,22 @@ def _tg_poll_loop():
     global _tg_active, _TG_LAST_UPDATE_ID
     _tg_active = True
     _consecutive_errors = 0
+    import sys
+    sys.stderr.write("[TG] Poll loop thread started\n")
+    sys.stderr.flush()
 
     # Send startup notification
+    sys.stderr.write("[TG] Attempting startup message...\n")
+    sys.stderr.flush()
     sent_ok = _tg_send(
         "SYNAPSE Telegram bridge started.\nSend /start for commands."
     )
+    sys.stderr.write(f"[TG] Startup message result: {sent_ok}\n")
+    sys.stderr.flush()
     _tg_log_event("out", "Bridge started")
     if not sent_ok:
-        print("[TG] WARNING: startup message failed to send", flush=True)
+        sys.stderr.write("[TG] WARNING: startup message failed to send\n")
+        sys.stderr.flush()
 
     while _tg_active:
         try:
@@ -3101,6 +3115,34 @@ def api_telegram_connect():
         _TG_CHAT_ID = str(body["chat_id"])
     result = _start_telegram()
     return json.dumps(result)
+
+
+@app.route("/api/telegram/test")
+def api_telegram_test():
+    """Diagnostic: test _tg_http from request handler (not background thread)."""
+    if not _TG_TOKEN:
+        return json.dumps({"error": "no token"})
+    # 1. Test getMe (simplest API call)
+    r1 = _tg_http("GET", f"https://api.telegram.org/bot{_TG_TOKEN}/getMe", timeout=10)
+    # 2. Test sendMessage
+    r2 = None
+    if _TG_CHAT_ID:
+        r2 = _tg_http(
+            "POST",
+            f"https://api.telegram.org/bot{_TG_TOKEN}/sendMessage",
+            {"chat_id": _TG_CHAT_ID, "text": "SYNAPSE diagnostic ping"},
+            timeout=10,
+        )
+    # 3. Thread status
+    thread_alive = _tg_thread.is_alive() if _tg_thread else None
+    return json.dumps({
+        "getMe": r1,
+        "sendMessage": r2,
+        "thread_alive": thread_alive,
+        "tg_active": _tg_active,
+        "token_set": bool(_TG_TOKEN),
+        "chat_set": bool(_TG_CHAT_ID),
+    }, indent=2)
 
 
 # Auto-start if configured
