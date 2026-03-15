@@ -2752,6 +2752,297 @@ def self_diagnostics():
     return json.dumps(report), 200, {"Content-Type": "application/json"}
 
 
+# ── Telegram Bridge ──────────────────────────────────────────────
+# Bi-directional: forwards SYNAPSE events to Telegram + receives commands.
+
+_TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+_TG_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+_tg_thread = None
+_tg_active = False
+_TG_POLL_INTERVAL = 3       # Poll every 3 seconds for new messages
+_TG_LAST_UPDATE_ID = 0      # Track processed updates
+_tg_log = []
+_TG_LOG_MAX = 50
+_tg_event_queue = []         # Events waiting to be sent
+
+
+def _tg_send(text, parse_mode=None):
+    """Send a message to the owner via Telegram."""
+    if not _TG_TOKEN or not _TG_CHAT_ID or not _requests_available:
+        return False
+    try:
+        payload = {"chat_id": _TG_CHAT_ID, "text": text[:4000]}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        resp = requests.post(
+            f"https://api.telegram.org/bot{_TG_TOKEN}/sendMessage",
+            json=payload, timeout=15
+        )
+        return resp.status_code == 200 and resp.json().get("ok", False)
+    except Exception:
+        return False
+
+
+def _tg_log_event(direction, text):
+    """Log Telegram event for UI."""
+    entry = {"time": datetime.now().isoformat(), "direction": direction, "text": text[:200]}
+    _tg_log.append(entry)
+    if len(_tg_log) > _TG_LOG_MAX:
+        _tg_log.pop(0)
+    try:
+        socketio.emit("telegram_event", entry)
+    except Exception:
+        pass
+
+
+def _tg_notify(event_type, message):
+    """Queue a SYNAPSE event for Telegram notification (non-blocking)."""
+    if not _TG_TOKEN or not _TG_CHAT_ID:
+        return
+    icons = {
+        "dream": "💤", "consciousness": "💭", "metacognition": "📊",
+        "moltbook": "🦞", "healing": "🩺", "pr": "🔀", "evolution": "🧬",
+        "error": "❌", "deploy": "🚀", "system": "⚡",
+    }
+    icon = icons.get(event_type, "📡")
+    text = f"{icon} [{event_type.upper()}]\n{message}"
+    _tg_event_queue.append(text)
+
+
+def _tg_handle_command(text):
+    """Process a command from Telegram and return response."""
+    text = text.strip()
+    cmd = text.split()[0].lower() if text else ""
+    args = text[len(cmd):].strip()
+
+    if cmd == "/start":
+        return (
+            "SYNAPSE Neural AI System\n\n"
+            "Commands:\n"
+            "/status - System overview\n"
+            "/dream - Trigger dream cycle\n"
+            "/grades - Recent self-grades\n"
+            "/identity - Personality traits\n"
+            "/moltbook - Moltbook status\n"
+            "/health - Self-healing status\n"
+            "/memory - Memory stats\n"
+            "/ask <message> - Send task to SYNAPSE"
+        )
+
+    elif cmd == "/status":
+        ws = app.config.get("WORKSPACE", os.getcwd())
+        mem = SynapseMemory(ws)
+        mc = mem.count()
+        lines = [
+            "SYNAPSE Status\n",
+            f"Memories: {mc}",
+            f"Dream cycle: {'active' if _dream_active else 'off'}",
+            f"Last dream: {_consciousness_identity.get('last_dream', 'never')}",
+            f"Tasks graded: {_consciousness_identity.get('tasks_graded', 0)}",
+            f"Avg grade: {_consciousness_identity.get('avg_self_grade', 0)}/10",
+            f"Healing: {'active' if _healing_active else 'off'}",
+            f"Moltbook: {'active' if _moltbook_active else 'off'}",
+            f"PR monitor: {'active' if _pr_monitor_active else 'off'}",
+        ]
+        return "\n".join(lines)
+
+    elif cmd == "/dream":
+        # Trigger manual dream
+        def _manual():
+            ws = app.config.get("WORKSPACE", os.getcwd())
+            mem = SynapseMemory(ws)
+            if mem.count() < 2:
+                _tg_send("Not enough memories for dream cycle")
+                return
+            _tg_send("Entering dream state...")
+            rem = _dream_rem_phase(mem)
+            deep = _dream_deep_sleep_phase(mem)
+            consolidation = _dream_consolidation_phase(mem)
+            _dream_history.append({
+                "time": datetime.now().isoformat(), "manual": True,
+                "phases": {"rem": {"insights": rem}, "deep_sleep": deep or {}, "consolidation": consolidation},
+            })
+            _consciousness_identity["dream_insights_total"] += len(rem)
+            _consciousness_identity["last_dream"] = datetime.now().isoformat()
+            summary = f"Dream complete!\n\nInsights found: {len(rem)}\nMemories decayed: {consolidation.get('decayed', 0)}\nMemories pruned: {consolidation.get('pruned', 0)}"
+            if rem:
+                summary += "\n\nInsights:\n" + "\n".join(["- " + r.get("insight", "")[:100] for r in rem[:3]])
+            _tg_send(summary)
+        threading.Thread(target=_manual, daemon=True).start()
+        return "Dream cycle triggered..."
+
+    elif cmd == "/grades":
+        if not _metacognition_grades:
+            return "No self-grades yet. Complete a task first."
+        lines = ["Recent Self-Grades\n"]
+        for g in _metacognition_grades[-5:]:
+            stars = "*" * int(g["grades"].get("overall", 5))
+            lines.append(f"{stars} {g['grades'].get('overall', '?')}/10")
+            lines.append(f"  Task: {g['task'][:60]}")
+            lines.append(f"  {g.get('reflection', '')[:80]}\n")
+        return "\n".join(lines)
+
+    elif cmd == "/identity":
+        traits = _consciousness_identity.get("personality_traits", {})
+        lines = ["SYNAPSE Identity\n"]
+        for trait, val in traits.items():
+            bar = "█" * int(val * 10) + "░" * (10 - int(val * 10))
+            lines.append(f"  {trait}: {bar} {int(val*100)}%")
+        s = _consciousness_identity.get("strengths", [])
+        w = _consciousness_identity.get("weaknesses", [])
+        if s:
+            lines.append("\nStrengths: " + ", ".join(s[:3]))
+        if w:
+            lines.append("Weaknesses: " + ", ".join(w[:3]))
+        changelog = _consciousness_identity.get("personality_changelog", [])
+        if changelog:
+            lines.append("\nRecent changes:")
+            for c in changelog[-3:]:
+                lines.append(f"  {c['trait']}: {c.get('old',0):.0%} -> {c.get('new',0):.0%}")
+        return "\n".join(lines)
+
+    elif cmd == "/moltbook":
+        return (
+            f"Moltbook Status\n\n"
+            f"Active: {_moltbook_active}\n"
+            f"Interval: {_MOLTBOOK_INTERVAL}s\n"
+            f"Conversations: {len(_moltbook_log)}\n"
+            f"Last 3 events:\n" +
+            "\n".join([f"- {e.get('text', '')[:80]}" for e in _moltbook_log[-3:]])
+        )
+
+    elif cmd == "/health":
+        return (
+            f"Self-Healing Status\n\n"
+            f"Active: {_healing_active}\n"
+            f"Error count: {len(_error_log)}\n"
+            f"Threshold: {_HEAL_ERROR_THRESHOLD}\n"
+            f"Last heal: {_last_heal_time if _last_heal_time else 'never'}\n"
+            f"History: {len(_healing_log)} actions"
+        )
+
+    elif cmd == "/memory":
+        ws = app.config.get("WORKSPACE", os.getcwd())
+        mem = SynapseMemory(ws)
+        stats = mem.get_weight_stats()
+        lines = [
+            "Memory Stats\n",
+            f"Total: {stats.get('total', 0)}",
+            f"Avg weight: {stats.get('avg_weight', 0):.3f}",
+            f"Min weight: {stats.get('min_weight', 0):.3f}",
+            f"Max weight: {stats.get('max_weight', 0):.3f}",
+        ]
+        types = stats.get("type_distribution", {})
+        if types:
+            lines.append("\nBy type:")
+            for t, c in types.items():
+                lines.append(f"  {t}: {c}")
+        return "\n".join(lines)
+
+    elif cmd == "/ask" and args:
+        # Forward as a task — emit to any connected UI clients
+        try:
+            socketio.emit("telegram_task", {"task": args})
+            _tg_log_event("in", f"Task requested: {args[:100]}")
+        except Exception:
+            pass
+        return f"Task received: {args[:100]}\n\n(Processing via connected SYNAPSE instance)"
+
+    else:
+        return "Unknown command. Send /start for help."
+
+
+def _tg_poll_loop():
+    """Background thread: poll Telegram for new messages."""
+    global _tg_active, _TG_LAST_UPDATE_ID
+    _tg_active = True
+
+    # Send startup notification
+    _tg_send("SYNAPSE Telegram bridge started.\nSend /start for commands.")
+    _tg_log_event("out", "Bridge started")
+
+    while _tg_active:
+        try:
+            # Send queued events
+            while _tg_event_queue:
+                msg = _tg_event_queue.pop(0)
+                _tg_send(msg)
+                _tg_log_event("out", msg[:100])
+                time.sleep(0.5)  # Rate limit
+
+            # Poll for new messages
+            params = {"timeout": 10, "offset": _TG_LAST_UPDATE_ID + 1}
+            resp = requests.get(
+                f"https://api.telegram.org/bot{_TG_TOKEN}/getUpdates",
+                params=params, timeout=15
+            )
+            if resp.status_code != 200:
+                time.sleep(_TG_POLL_INTERVAL)
+                continue
+
+            data = resp.json()
+            for update in data.get("result", []):
+                _TG_LAST_UPDATE_ID = update["update_id"]
+                msg = update.get("message", {})
+                text = msg.get("text", "")
+                chat_id = str(msg.get("chat", {}).get("id", ""))
+
+                # Only respond to authorized chat
+                if chat_id != _TG_CHAT_ID:
+                    continue
+
+                if text:
+                    _tg_log_event("in", text[:100])
+                    response = _tg_handle_command(text)
+                    if response:
+                        _tg_send(response)
+                        _tg_log_event("out", response[:100])
+
+        except Exception:
+            pass
+        time.sleep(_TG_POLL_INTERVAL)
+
+
+def _start_telegram():
+    """Start the Telegram bot polling loop."""
+    global _tg_thread
+    if not _TG_TOKEN or not _TG_CHAT_ID:
+        return {"status": "not_configured", "message": "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID"}
+    if _tg_thread and _tg_thread.is_alive():
+        return {"status": "already_running"}
+    _tg_thread = threading.Thread(target=_tg_poll_loop, daemon=True, name="telegram-bot")
+    _tg_thread.start()
+    return {"status": "started"}
+
+
+# Telegram API endpoints
+@app.route("/api/telegram/status")
+def api_telegram_status():
+    return json.dumps({
+        "active": _tg_active,
+        "configured": bool(_TG_TOKEN and _TG_CHAT_ID),
+        "log": _tg_log[-10:],
+        "queue_size": len(_tg_event_queue),
+    })
+
+
+@app.route("/api/telegram/connect", methods=["POST"])
+def api_telegram_connect():
+    global _TG_TOKEN, _TG_CHAT_ID
+    body = request.get_json(silent=True) or {}
+    if body.get("token"):
+        _TG_TOKEN = body["token"]
+    if body.get("chat_id"):
+        _TG_CHAT_ID = str(body["chat_id"])
+    result = _start_telegram()
+    return json.dumps(result)
+
+
+# Auto-start if configured
+if _TG_TOKEN and _TG_CHAT_ID:
+    _start_telegram()
+
+
 # ── Consciousness Architecture ───────────────────────────────────
 # Implements Dreaming (memory consolidation), Forgetting (memory decay),
 # and Metacognition (self-grading) — inspired by human subconscious.
@@ -2802,6 +3093,11 @@ def _consciousness_event(event_type, message, data=None):
         socketio.emit("consciousness_event", entry)
     except Exception:
         pass
+    # Forward important events to Telegram
+    _tg_important = {"dream_start", "dream_complete", "dream_connection", "dream_meta_pattern",
+                     "personality_shift", "metacognition_grade", "dream_error"}
+    if event_type in _tg_important:
+        _tg_notify("consciousness" if "dream" in event_type else "metacognition", message)
 
 
 # ── Dream Cycle (Memory Consolidation) ──────────────────────────
@@ -3156,6 +3452,7 @@ def _self_heal_loop():
                 "action": "diagnosis_started",
                 "errors": dict(error_summary),
             })
+            _tg_notify("healing", f"Self-healing triggered: {dict(error_summary)}")
 
             # Get the config and try to call AI for diagnosis
             config = app.config.get("SYNAPSE_CONFIG", {})
@@ -3250,12 +3547,14 @@ Only respond with the JSON, nothing else."""
                     "diagnosis": fix_data.get("diagnosis", ""),
                     "files": [f.get("path", "") for f in files_to_modify],
                 })
+                _tg_notify("healing", f"Fix applied: {fix_data.get('diagnosis', '')[:100]}")
             else:
                 _healing_log.append({
                     "time": datetime.now().isoformat(),
                     "action": "fix_failed",
                     "reason": "Could not apply fix or push to GitHub",
                 })
+                _tg_notify("healing", "Fix failed — could not apply or push")
 
         except Exception as e:
             _healing_log.append({
@@ -3514,6 +3813,9 @@ def _pr_log_entry(msg, level="info"):
         socketio.emit("pr_monitor_event", _pr_log[-1])
     except Exception:
         pass
+    # Forward PR events to Telegram
+    if level in ("warning", "error") or "merged" in str(msg).lower() or "new pr" in str(msg).lower():
+        _tg_notify("pr", str(msg)[:150])
 
 
 def _get_github_repo():
@@ -3771,6 +4073,9 @@ def _mb_log(msg_type, text, author="SYNAPSE"):
         socketio.emit("moltbook_event", _moltbook_log[-1])
     except Exception:
         pass
+    # Forward replies and errors to Telegram
+    if msg_type in ("reply", "error", "evolution"):
+        _tg_notify("moltbook", f"{author}: {str(text)[:150]}")
 
 
 def _mb_solve_verification(verification):
