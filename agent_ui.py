@@ -2873,6 +2873,35 @@ def _log_error(category, message):
     if cat_count <= 3 or cat_count % 5 == 0:
         _tg_notify("error", f"[{category}] {str(message)[:200]}")
 
+
+_background_tasks_booted = False
+
+
+@app.before_request
+def _boot_background_tasks():
+    """Start all background tasks on first HTTP request.
+
+    eventlet greenlets created at module-import time never get scheduled
+    because the event loop isn't running yet.  Deferring to the first
+    HTTP request guarantees the hub is active.
+    """
+    global _background_tasks_booted
+    if _background_tasks_booted:
+        return
+    _background_tasks_booted = True
+    print("[BOOT] First request — starting background tasks", flush=True)
+    if _TG_TOKEN and _TG_CHAT_ID:
+        _start_telegram()
+    if _cloud_mode:
+        _start_healing_loop()
+    _gh_token = os.environ.get("GITHUB_TOKEN", "")
+    if _gh_token and _github_available:
+        _start_pr_monitor()
+    if _moltbook_key:
+        _start_moltbook()
+    _start_dream_cycle()
+    print("[BOOT] All background tasks launched", flush=True)
+
 
 @app.route("/health")
 def health_check():
@@ -3417,9 +3446,9 @@ def api_telegram_test():
     }, indent=2)
 
 
-# Auto-start if configured
-if _TG_TOKEN and _TG_CHAT_ID:
-    _start_telegram()
+# Auto-start deferred to first HTTP request (see _boot_background_tasks)
+# if _TG_TOKEN and _TG_CHAT_ID:
+#     _start_telegram()
 
 
 # ── Consciousness Architecture ───────────────────────────────────
@@ -4201,9 +4230,9 @@ def trigger_healing():
     return json.dumps({"status": "healing_triggered", "errors_queued": len(_error_log)})
 
 
-# Auto-start healer in Cloud Run
-if _cloud_mode:
-    _start_healing_loop()
+# Auto-start deferred to first HTTP request (see _boot_background_tasks)
+# if _cloud_mode:
+#     _start_healing_loop()
 
 
 # ── GitHub PR Monitor & Auto-Pull ────────────────────────────────
@@ -4428,10 +4457,10 @@ def pr_monitor_trigger():
     return json.dumps({"status": "triggered"})
 
 
-# Auto-start PR monitor if GitHub token is available
 _gh_token = os.environ.get("GITHUB_TOKEN", "")
-if _gh_token and _github_available:
-    _start_pr_monitor()
+# Auto-start deferred to first HTTP request (see _boot_background_tasks)
+# if _gh_token and _github_available:
+#     _start_pr_monitor()
 
 MOLTBOOK_API = "https://www.moltbook.com/api/v1"
 _moltbook_key = os.environ.get("MOLTBOOK_API_KEY", "")
@@ -5349,12 +5378,12 @@ def moltbook_connect():
     return json.dumps(result)
 
 
-# Auto-start Moltbook if key is configured
-if _moltbook_key:
-    _start_moltbook()
+# Auto-start deferred to first HTTP request (see _boot_background_tasks)
+# if _moltbook_key:
+#     _start_moltbook()
 
-# Auto-start Consciousness Dream Cycle
-_start_dream_cycle()
+# Auto-start deferred to first HTTP request (see _boot_background_tasks)
+# _start_dream_cycle()
 
 
 # ── Consciousness API Endpoints ──────────────────────────────────
