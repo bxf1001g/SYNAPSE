@@ -3009,19 +3009,83 @@ _tg_event_queue = []         # Events waiting to be sent
 
 
 def _tg_http(method, url, payload=None, timeout=8):
-    """Make HTTP request via requests lib in a tpool thread.
+    """HTTP request using real (un-patched) sockets via eventlet.tpool.
 
-    eventlet.tpool.execute runs the callable in a real OS thread where
-    blocking I/O works normally, preventing event-loop stalls.
+    eventlet monkey-patches socket/ssl, making them unreliable in green
+    threads.  We grab the *original* modules, build an HTTPSConnection
+    from them, and run the whole thing inside tpool so the event loop
+    never blocks.
     """
-    import requests as _requests
+    from urllib.parse import urlparse
 
     def _do():
-        if method.upper() == "GET":
-            r = _requests.get(url, timeout=timeout)
-        else:
-            r = _requests.post(url, json=payload, timeout=timeout)
-        return {"status": r.status_code, "data": r.json()}
+        # Get the REAL socket and ssl modules that eventlet stashed away
+        try:
+            from eventlet.patcher import original
+            _real_socket = original("socket")
+            _real_ssl = original("ssl")
+        except Exception:
+            import socket as _real_socket
+            import ssl as _real_ssl
+
+        parsed = urlparse(url)
+        host = parsed.hostname
+        port = parsed.port or 443
+        path = parsed.path
+        if parsed.query:
+            path += "?" + parsed.query
+
+        body_bytes = None
+        if payload:
+            body_bytes = json.dumps(payload).encode()
+
+        ctx = _real_ssl.create_default_context()
+        raw_sock = _real_socket.create_connection((host, port), timeout=timeout)
+        conn = ctx.wrap_socket(raw_sock, server_hostname=host)
+        try:
+            req_line = f"{method.upper()} {path} HTTP/1.1\r\n"
+            headers = f"Host: {host}\r\nConnection: close\r\n"
+            if body_bytes:
+                headers += "Content-Type: application/json\r\n"
+                headers += f"Content-Length: {len(body_bytes)}\r\n"
+            raw_req = (req_line + headers + "\r\n").encode()
+            if body_bytes:
+                raw_req += body_bytes
+
+            conn.sendall(raw_req)
+
+            # Read full response
+            chunks = []
+            while True:
+                chunk = conn.recv(8192)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            raw_resp = b"".join(chunks)
+        finally:
+            conn.close()
+
+        # Parse HTTP response
+        header_end = raw_resp.find(b"\r\n\r\n")
+        status_line = raw_resp[:raw_resp.find(b"\r\n")].decode()
+        status_code = int(status_line.split()[1])
+        body = raw_resp[header_end + 4:]
+        # Handle chunked transfer encoding
+        resp_headers = raw_resp[:header_end].decode().lower()
+        if "transfer-encoding: chunked" in resp_headers:
+            decoded = []
+            pos = 0
+            while pos < len(body):
+                nl = body.find(b"\r\n", pos)
+                if nl == -1:
+                    break
+                chunk_size = int(body[pos:nl], 16)
+                if chunk_size == 0:
+                    break
+                decoded.append(body[nl + 2:nl + 2 + chunk_size])
+                pos = nl + 2 + chunk_size + 2
+            body = b"".join(decoded)
+        return {"status": status_code, "data": json.loads(body)}
 
     try:
         try:
