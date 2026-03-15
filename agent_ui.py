@@ -2974,26 +2974,28 @@ _tg_event_queue = []         # Events waiting to be sent
 
 
 def _tg_http(method, url, payload=None, timeout=15):
-    """Make HTTP request using http.client (bypasses eventlet socket patches)."""
-    import http.client
-    import ssl
-    from urllib.parse import urlparse
+    """Make HTTP request via subprocess+curl to bypass eventlet patches.
+
+    eventlet monkey-patches socket/ssl at the C level, breaking http.client
+    and urllib in background greenlets.  Using curl in a subprocess gives
+    a completely independent network stack.
+    """
+    import subprocess
     try:
-        data = json.dumps(payload).encode("utf-8") if payload else None
-        parsed = urlparse(url)
-        ctx = ssl.create_default_context()
-        conn = http.client.HTTPSConnection(parsed.hostname, timeout=timeout,
-                                           context=ctx)
-        headers = {"Content-Type": "application/json"} if data else {}
-        path = parsed.path
-        if parsed.query:
-            path += "?" + parsed.query
-        conn.request(method, path, body=data, headers=headers)
-        resp = conn.getresponse()
-        body = resp.read().decode("utf-8")
-        status = resp.status
-        conn.close()
-        return {"status": status, "data": json.loads(body)}
+        cmd = ["curl", "-s", "-X", method, "--max-time", str(timeout)]
+        if payload:
+            cmd += ["-H", "Content-Type: application/json",
+                    "-d", json.dumps(payload)]
+        cmd.append(url)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout + 5
+        )
+        if result.returncode != 0:
+            return {"status": 0,
+                    "error": f"curl exit {result.returncode}: {result.stderr[:200]}"}
+        body = json.loads(result.stdout)
+        status = 200 if body.get("ok") else 400
+        return {"status": status, "data": body}
     except Exception as exc:
         return {"status": 0, "error": f"{type(exc).__name__}: {exc}"}
 
