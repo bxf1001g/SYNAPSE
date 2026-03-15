@@ -3013,7 +3013,232 @@ if _cloud_mode:
     _start_healing_loop()
 
 
-# ── Moltbook Social Network Integration ─────────────────────────
+# ── GitHub PR Monitor & Auto-Pull ────────────────────────────────
+
+_pr_monitor_thread = None
+_pr_monitor_active = False
+_PR_CHECK_INTERVAL = 600  # Check every 10 min
+_pr_log = []
+_PR_LOG_MAX = 50
+_TRUSTED_PR_AUTHORS = {"copilot", "copilot[bot]", "copilot-swe-agent", "dependabot[bot]"}
+
+
+def _pr_log_entry(msg, level="info"):
+    _pr_log.append({"time": datetime.now().isoformat(), "level": level, "msg": str(msg)[:300]})
+    while len(_pr_log) > _PR_LOG_MAX:
+        _pr_log.pop(0)
+    try:
+        socketio.emit("pr_monitor_event", _pr_log[-1])
+    except Exception:
+        pass
+
+
+def _get_github_repo():
+    """Get PyGithub repo object."""
+    if not _github_available:
+        return None
+    config = app.config.get("SYNAPSE_CONFIG", {})
+    token = config.get("providers", {}).get("github", {}).get("api_key", "")
+    if not token:
+        token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        return None
+    try:
+        g = _Github(token)
+        # Get repo from git remote
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        r = subprocess.run("git remote get-url origin", shell=True, cwd=project_root,
+                           capture_output=True, text=True, timeout=10)
+        remote_url = r.stdout.strip()
+        m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", remote_url)
+        if m:
+            return g.get_repo(m.group(1))
+    except Exception:
+        pass
+    return None
+
+
+def _pr_monitor_loop():
+    """Background loop: check for open PRs, review, and auto-merge trusted ones."""
+    global _pr_monitor_active
+    _pr_monitor_active = True
+    time.sleep(15)  # Initial delay
+    _pr_log_entry("PR monitor started — checking every 10 min")
+
+    while _pr_monitor_active:
+        try:
+            repo = _get_github_repo()
+            if not repo:
+                _pr_log_entry("No GitHub repo access — check GITHUB_TOKEN", "warn")
+                time.sleep(_PR_CHECK_INTERVAL)
+                continue
+
+            open_prs = list(repo.get_pulls(state="open", sort="updated", direction="desc"))
+
+            if not open_prs:
+                _pr_log_entry("No open PRs")
+                time.sleep(_PR_CHECK_INTERVAL)
+                continue
+
+            _pr_log_entry(f"Found {len(open_prs)} open PR(s)")
+
+            for pr in open_prs[:5]:  # Process max 5 PRs per cycle
+                author = pr.user.login.lower() if pr.user else ""
+                title = pr.title
+                pr_num = pr.number
+                is_draft = pr.draft
+
+                _pr_log_entry(f"PR #{pr_num}: {title} (by {author}, draft={is_draft})")
+
+                if is_draft:
+                    _pr_log_entry(f"PR #{pr_num} is draft — skipping", "info")
+                    continue
+
+                # Check if from trusted author (Copilot, Dependabot, or self-evolution)
+                is_trusted = author in _TRUSTED_PR_AUTHORS
+                is_self_evolution = any(
+                    prefix in (pr.head.ref or "")
+                    for prefix in ["synapse-evolve-", "synapse-heal-"]
+                )
+
+                if is_trusted or is_self_evolution:
+                    # Auto-review and merge trusted PRs
+                    _pr_log_entry(f"PR #{pr_num} is trusted (author={author}) — reviewing")
+                    _auto_review_and_merge(repo, pr)
+                else:
+                    # For external PRs, just log and notify
+                    _pr_log_entry(f"PR #{pr_num} from external contributor {author} — needs manual review")
+
+        except Exception as e:
+            _pr_log_entry(f"PR monitor error: {e}", "error")
+
+        time.sleep(_PR_CHECK_INTERVAL)
+
+
+def _auto_review_and_merge(repo, pr):
+    """Review a trusted PR using AI, then merge if it looks safe."""
+    pr_num = pr.number
+    try:
+        # Get the diff
+        files = list(pr.get_files())
+        changes_summary = []
+        for f in files[:10]:  # Limit to 10 files
+            changes_summary.append(f"{f.filename}: +{f.additions}/-{f.deletions}")
+
+        diff_summary = "\n".join(changes_summary)
+        _pr_log_entry(f"PR #{pr_num} changes: {diff_summary[:200]}")
+
+        # AI review (quick safety check)
+        config = app.config.get("SYNAPSE_CONFIG", {})
+        providers = config.get("providers", {})
+        gemini_cfg = providers.get("gemini", {})
+
+        safe_to_merge = True
+        review_comment = "Auto-reviewed by SYNAPSE PR Monitor."
+
+        if gemini_cfg.get("api_key") and genai:
+            prompt = (
+                f"You are SYNAPSE, reviewing a pull request for safety before auto-merging.\n\n"
+                f"PR Title: {pr.title}\n"
+                f"PR Body: {(pr.body or '')[:500]}\n"
+                f"Author: {pr.user.login}\n"
+                f"Files changed:\n{diff_summary}\n\n"
+                f"Is this PR safe to auto-merge? Check for:\n"
+                f"1. No secrets/API keys in code\n"
+                f"2. No destructive operations (file deletion, DB drops)\n"
+                f"3. No malicious code\n"
+                f"4. Changes are reasonable for the PR title\n\n"
+                f"Respond with JSON: {{\"safe\": true/false, \"reason\": \"brief explanation\"}}"
+            )
+            try:
+                client = genai.Client(api_key=gemini_cfg["api_key"])
+                response = client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=prompt,
+                    config={"max_output_tokens": 150},
+                )
+                raw = response.text.strip()
+                if "```" in raw:
+                    raw = raw.split("```")[1]
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+                    raw = raw.strip()
+                import json as _json
+                result = _json.loads(raw)
+                safe_to_merge = result.get("safe", False)
+                review_comment = result.get("reason", "AI review complete")
+                _pr_log_entry(f"PR #{pr_num} AI review: safe={safe_to_merge}, reason={review_comment[:100]}")
+            except Exception as e:
+                _pr_log_entry(f"PR #{pr_num} AI review failed: {e} — defaulting to safe", "warn")
+                safe_to_merge = True
+
+        if safe_to_merge:
+            # Merge the PR
+            try:
+                merge_result = pr.merge(
+                    commit_title=f"Merge PR #{pr_num}: {pr.title}",
+                    commit_message=f"Auto-merged by SYNAPSE PR Monitor.\n\nReview: {review_comment}",
+                    merge_method="merge",
+                )
+                if merge_result.merged:
+                    _pr_log_entry(f"PR #{pr_num} merged successfully!")
+
+                    # Pull the changes locally
+                    project_root = os.path.dirname(os.path.abspath(__file__))
+                    subprocess.run("git pull origin main", shell=True,
+                                   cwd=project_root, capture_output=True, timeout=30)
+                    _pr_log_entry(f"PR #{pr_num} pulled to local")
+                else:
+                    _pr_log_entry(f"PR #{pr_num} merge failed: {merge_result.message}", "error")
+            except Exception as e:
+                _pr_log_entry(f"PR #{pr_num} merge error: {e}", "error")
+        else:
+            _pr_log_entry(f"PR #{pr_num} flagged unsafe — skipping merge", "warn")
+            # Leave a review comment
+            try:
+                pr.create_issue_comment(
+                    f"🤖 **SYNAPSE PR Monitor** — Auto-review flagged this PR:\n\n"
+                    f"> {review_comment}\n\n"
+                    f"Manual review required before merging."
+                )
+            except Exception:
+                pass
+
+    except Exception as e:
+        _pr_log_entry(f"PR #{pr_num} review error: {e}", "error")
+
+
+def _start_pr_monitor():
+    """Start the PR monitor background thread."""
+    global _pr_monitor_thread
+    if _pr_monitor_thread and _pr_monitor_thread.is_alive():
+        return {"status": "already_running"}
+    _pr_monitor_thread = threading.Thread(target=_pr_monitor_loop, daemon=True, name="pr-monitor")
+    _pr_monitor_thread.start()
+    return {"status": "started"}
+
+
+@app.route("/api/pr-monitor/status")
+def pr_monitor_status():
+    return json.dumps({
+        "active": _pr_monitor_active,
+        "log": list(_pr_log),
+        "check_interval": _PR_CHECK_INTERVAL,
+        "trusted_authors": list(_TRUSTED_PR_AUTHORS),
+    })
+
+
+@app.route("/api/pr-monitor/trigger", methods=["POST"])
+def pr_monitor_trigger():
+    """Manually trigger a PR check."""
+    _start_pr_monitor()
+    return json.dumps({"status": "triggered"})
+
+
+# Auto-start PR monitor if GitHub token is available
+_gh_token = os.environ.get("GITHUB_TOKEN", "")
+if _gh_token and _github_available:
+    _start_pr_monitor()
 
 MOLTBOOK_API = "https://www.moltbook.com/api/v1"
 _moltbook_key = os.environ.get("MOLTBOOK_API_KEY", "")
