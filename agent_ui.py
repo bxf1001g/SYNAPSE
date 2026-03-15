@@ -4666,6 +4666,7 @@ def _mb_heartbeat():
 
             # 2. Check home dashboard
             home = _mb_request("GET", "/home")
+            karma = 0
             if home and home.get("your_account"):
                 karma = home["your_account"].get("karma", 0)
                 notifs = home["your_account"].get("unread_notification_count", 0)
