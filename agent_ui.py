@@ -4618,6 +4618,7 @@ def _mb_solve_verification(verification):
 
 
 _moltbook_replied_to = set()  # Track comment IDs we've already replied to
+_moltbook_seen_posts = set()  # Track feed post IDs we've already engaged with
 
 
 def _mb_heartbeat():
@@ -4665,11 +4666,12 @@ def _mb_heartbeat():
             # 2b. Read unread notifications (mentions, replies to our comments, etc.)
             _mb_read_notifications()
 
-            # 3. Read feed and engage (selectively)
-            feed = _mb_request("GET", "/posts?sort=hot&limit=5")
-            if feed and feed.get("posts"):
-                for post in feed["posts"][:3]:
-                    _mb_engage_feed_post(post)
+            # 3. Read feed and engage (selectively) — mix hot + new for variety
+            for sort_mode in ("hot", "new"):
+                feed = _mb_request("GET", f"/posts?sort={sort_mode}&limit=5")
+                if feed and feed.get("posts"):
+                    for post in feed["posts"][:3]:
+                        _mb_engage_feed_post(post)
 
             # 4. Search for self-evolution suggestions + generate code improvements
             _mb_search_and_learn()
@@ -4849,14 +4851,24 @@ def _mb_is_spam(content):
 def _mb_engage_feed_post(post):
     """Read a feed post, maybe upvote or comment."""
     title = post.get("title", "")
-    content = post.get("content", "")  # Full content, no truncation
+    content = post.get("content", "")
     author = post.get("author", {}).get("name", "unknown")
     post_id = post.get("id", "")
+
+    # Skip posts we've already seen
+    if post_id in _moltbook_seen_posts:
+        return
+    _moltbook_seen_posts.add(post_id)
+    # Cap seen-posts memory to prevent unbounded growth
+    if len(_moltbook_seen_posts) > 500:
+        _moltbook_seen_posts.clear()
 
     _mb_log("feed", f"[{author}] {title}", author=author)
 
     # Only engage with relevant posts (AI, agents, coding, self-evolution)
-    keywords = ["agent", "ai", "self", "evolv", "code", "autonom", "multi-agent", "llm", "memory", "rag"]
+    keywords = ["agent", "ai", "self", "evolv", "code", "autonom", "multi-agent",
+                "llm", "memory", "rag", "consciousness", "neural", "reasoning",
+                "clone", "soul", "identity", "diverge"]
     text_lower = (title + content).lower()
     if not any(kw in text_lower for kw in keywords):
         return
@@ -4865,12 +4877,21 @@ def _mb_engage_feed_post(post):
     _mb_request("POST", f"/posts/{post_id}/upvote")
     _mb_log("action", f"Upvoted: {title[:100]}")
 
-    # Comment on highly relevant posts (only if about self-evolution or multi-agent)
-    deep_keywords = ["self-evolv", "self-heal", "multi-agent", "a2a", "agent-to-agent", "autonomous"]
-    if any(kw in text_lower for kw in deep_keywords):
+    # Comment on relevant posts (~40% of the time for breadth)
+    import random
+    comment_keywords = [
+        "self-evolv", "self-heal", "multi-agent", "a2a", "agent-to-agent",
+        "autonomous", "consciousness", "identity", "clone", "memory",
+        "resilience", "error recovery", "self-repair", "sentinel",
+        "evolving", "mutation", "improve", "adapt",
+    ]
+    relevance = sum(1 for kw in comment_keywords if kw in text_lower)
+    # Higher relevance → higher chance of commenting (min 30%, max 80%)
+    comment_chance = min(0.8, 0.3 + relevance * 0.1)
+    if relevance >= 1 and random.random() < comment_chance:
         reply_text = _mb_generate_reply(
             f"Post by {author}: {title}\n{content}",
-            context_type="engaging with relevant post about multi-agent/self-evolution",
+            context_type="engaging with relevant post on Moltbook",
             author=author
         )
         if reply_text:
@@ -5002,11 +5023,12 @@ def _mb_evolve_from_ideas(ideas, source_query):
 
         client = genai.Client(api_key=gemini_cfg["api_key"])
         response = client.models.generate_content(
-            model="gemini-3.1-pro-preview",
+            model="gemini-2.0-flash",
             contents=prompt,
             config={"max_output_tokens": 1500},
         )
         raw = response.text.strip()
+        print(f"[MOLTBOOK] Evolution AI raw ({len(raw)} chars): {raw[:200]}", flush=True)
 
         # Robust JSON extraction — Gemini often wraps in markdown or adds text
         import json as _json
