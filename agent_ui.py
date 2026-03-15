@@ -3014,8 +3014,7 @@ def _tg_http(method, url, payload=None, timeout=8):
     eventlet patches os.waitpid (breaking Popen.poll) and os.read/write
     (breaking PIPE).  We avoid BOTH by having curl write to a temp file
     (-o flag) and running subprocess.run in eventlet.tpool (real OS thread
-    where waitpid works).  No pipes, no poll — just blocking wait in a
-    real thread.
+    where waitpid works).  Zero pipes — stdout AND stderr go to DEVNULL.
     """
     import subprocess
     import tempfile
@@ -3026,16 +3025,17 @@ def _tg_http(method, url, payload=None, timeout=8):
         os.close(fd)
 
         cmd = ["curl", "-sS", "--connect-timeout", "5",
-               "--max-time", str(timeout), "-X", method.upper(),
-               "-o", tmp_path]
+               "--max-time", str(timeout), "-o", tmp_path]
         if payload:
             cmd += ["-H", "Content-Type: application/json",
                     "-d", json.dumps(payload)]
+        else:
+            cmd += ["-X", method.upper()]
         cmd.append(url)
 
         def _run():
             return subprocess.run(
-                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 timeout=timeout + 5
             )
 
@@ -3046,8 +3046,8 @@ def _tg_http(method, url, payload=None, timeout=8):
             result = _run()
 
         if result.returncode != 0:
-            err = (result.stderr or b"").decode(errors="replace")[:200]
-            return {"status": 0, "error": f"curl exit {result.returncode}: {err}"}
+            return {"status": 0,
+                    "error": f"curl exit {result.returncode}"}
 
         with open(tmp_path, "r", encoding="utf-8") as f:
             body = json.loads(f.read())
@@ -3345,14 +3345,17 @@ def _tg_poll_loop():
                 _tg_log_event("out", msg[:100])
                 socketio.sleep(0.5)
 
-            # Poll for new messages (short poll — no long-poll timeout
-            # because subprocess.run blocks the eventlet event loop)
+            # Poll for new messages via POST (same as sendMessage which works
+            # reliably; GET with query params was timing out on Cloud Run)
             offset = _TG_LAST_UPDATE_ID + 1
             poll_url = (
                 f"https://api.telegram.org/bot{_TG_TOKEN}/getUpdates"
-                f"?timeout=0&offset={offset}"
             )
-            result = _tg_http("GET", poll_url, timeout=5)
+            result = _tg_http(
+                "POST", poll_url,
+                {"timeout": 0, "offset": offset},
+                timeout=5,
+            )
             status = result.get("status", 0)
 
             if status == 409:
