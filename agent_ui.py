@@ -3008,23 +3008,31 @@ _TG_LOG_MAX = 50
 _tg_event_queue = []         # Events waiting to be sent
 
 
-def _tg_http(method, url, payload=None, timeout=15):
+def _tg_http(method, url, payload=None, timeout=8):
     """Make HTTP request via subprocess+curl to bypass eventlet patches.
 
-    eventlet monkey-patches socket/ssl at the C level, breaking http.client
-    and urllib in background greenlets.  Using curl in a subprocess gives
-    a completely independent network stack.
+    Uses eventlet.tpool.execute to run the blocking subprocess.run call
+    in a real OS thread, preventing it from blocking the event loop.
     """
     import subprocess
-    try:
+
+    def _do_curl():
         cmd = ["curl", "-s", "-X", method, "--max-time", str(timeout)]
         if payload:
             cmd += ["-H", "Content-Type: application/json",
                     "-d", json.dumps(payload)]
         cmd.append(url)
-        result = subprocess.run(
+        return subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout + 5
         )
+
+    try:
+        # tpool.execute runs in a real OS thread — doesn't block eventlet
+        try:
+            import eventlet.tpool
+            result = eventlet.tpool.execute(_do_curl)
+        except ImportError:
+            result = _do_curl()
         if result.returncode != 0:
             return {"status": 0,
                     "error": f"curl exit {result.returncode}: {result.stderr[:200]}"}
@@ -3317,13 +3325,14 @@ def _tg_poll_loop():
                 _tg_log_event("out", msg[:100])
                 socketio.sleep(0.5)
 
-            # Poll for new messages
+            # Poll for new messages (short poll — no long-poll timeout
+            # because subprocess.run blocks the eventlet event loop)
             offset = _TG_LAST_UPDATE_ID + 1
             poll_url = (
                 f"https://api.telegram.org/bot{_TG_TOKEN}/getUpdates"
-                f"?timeout=5&offset={offset}"
+                f"?timeout=0&offset={offset}"
             )
-            result = _tg_http("GET", poll_url, timeout=10)
+            result = _tg_http("GET", poll_url, timeout=5)
             status = result.get("status", 0)
 
             if status == 409:
