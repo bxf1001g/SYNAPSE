@@ -5003,15 +5003,27 @@ def _mb_evolve_from_ideas(ideas, source_query):
         f"Ideas from other agents:\n{ideas_text}\n\n"
         f"Based on these ideas, suggest ONE small, safe improvement to add to agent_ui.py. "
         f"The improvement must be:\n"
-        f"1. A NEW utility function or endpoint (do NOT modify existing functions)\n"
-        f"2. Self-contained (no new imports beyond what's already imported)\n"
-        f"3. Less than 30 lines of code\n"
-        f"4. Genuinely useful (error handling, metrics, utility helper, API endpoint)\n\n"
-        f"Respond with ONLY valid JSON:\n"
+        f"1. A NEW utility function or a new Flask @app.route endpoint\n"
+        f"2. DO NOT import anything. The file already imports: flask (app, request, jsonify, "
+        f"Response, send_from_directory), os, sys, json, datetime, threading, time, "
+        f"hashlib, re, traceback, pathlib, requests, subprocess. "
+        f"Use the existing 'app' object for routes.\n"
+        f"3. Between 5 and 25 lines of code\n"
+        f"4. Genuinely useful (error handling, metrics, utility, API endpoint)\n"
+        f"5. Use ONLY double quotes for ALL strings. Never use single quotes.\n"
+        f"6. Use a hash comment for the description, NOT a docstring. Example: # Return uptime\n"
+        f"7. No f-strings. Use str.format() or concatenation instead.\n"
+        f"8. No backslashes inside strings. Keep strings simple.\n\n"
+        f"EXAMPLE of correct code format:\n"
+        f"@app.route(\"/api/uptime\")\n"
+        f"def get_uptime():\n"
+        f"    # Return seconds since process start\n"
+        f"    return jsonify({{\"uptime\": time.time() - _BOOT_TIME}})\n\n"
+        f"Respond with ONLY a raw JSON object. No markdown fences, no extra text:\n"
         f'{{"improvement": "brief description", "confidence": 0.0-1.0, '
-        f'"code": "the Python code to ADD (will be appended before socketio handlers)", '
-        f'"reason": "why this helps based on the ideas"}}\n\n'
-        f"If no good improvement comes from these ideas, respond: "
+        f'"code": "the Python code", '
+        f'"reason": "why this helps"}}\n\n'
+        f"If no good improvement, respond: "
         f'{{"improvement": "none", "confidence": 0.0, "code": "", "reason": "no actionable ideas"}}'
     )
 
@@ -5022,13 +5034,6 @@ def _mb_evolve_from_ideas(ideas, source_query):
             return
 
         client = genai.Client(api_key=gemini_cfg["api_key"])
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-            config={"max_output_tokens": 1500},
-        )
-        raw = response.text.strip()
-        print(f"[MOLTBOOK] Evolution AI raw ({len(raw)} chars): {raw[:200]}", flush=True)
 
         # Robust JSON extraction — Gemini often wraps in markdown or adds text
         import json as _json
@@ -5067,43 +5072,119 @@ def _mb_evolve_from_ideas(ideas, source_query):
                             start = -1
             return None
 
-        evolution = _extract_json(raw)
-        if not evolution:
-            _mb_log("system", "Evolution skipped: could not parse AI response as JSON")
+        def _validate_in_file_context(code_str):
+            """Check if code compiles when inserted into agent_ui.py."""
+            agent_file = os.path.join(project_root, "agent_ui.py")
+            try:
+                with open(agent_file, "r", encoding="utf-8") as f:
+                    content = f.read()
+                marker = '@socketio.on("connect")'
+                idx = content.rfind(marker)
+                if idx == -1:
+                    return True, ""
+                test_content = (
+                    content[:idx] + "\n" + code_str + "\n\n" + content[idx:]
+                )
+                compile(test_content, "agent_ui.py", "exec")
+                return True, ""
+            except SyntaxError as e:
+                return False, str(e)
+
+        # ── Retry loop: generate → validate → fix → retry ──
+        max_attempts = 3
+        current_prompt = prompt
+        evolution = None
+        code = ""
+
+        for attempt in range(max_attempts):
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=current_prompt,
+                config={"max_output_tokens": 1500},
+            )
+            raw = response.text.strip()
+            print(f"[MOLTBOOK] Evolution AI attempt {attempt + 1} "
+                  f"({len(raw)} chars): {raw[:200]}", flush=True)
+
+            evolution = _extract_json(raw)
+            if not evolution:
+                _mb_log("system",
+                         f"Evolution attempt {attempt + 1}: JSON parse failed")
+                current_prompt = (
+                    "Your previous response was not valid JSON. "
+                    "Respond with ONLY a raw JSON object, no markdown "
+                    "fences, no commentary.\n\n" + prompt
+                )
+                continue
+
+            improvement = evolution.get("improvement", "none")
+            confidence = float(evolution.get("confidence", 0))
+            code = evolution.get("code", "")
+            reason = evolution.get("reason", "")
+
+            if improvement == "none" or confidence < 0.6 or not code.strip():
+                _mb_log("system",
+                         f"No evolution this cycle (confidence: {confidence:.0%})")
+                return
+
+            _mb_log("learn",
+                     f"AI suggests: {improvement} (confidence: {confidence:.0%})")
+
+            # Check 1: Standalone syntax
+            try:
+                compile(code, "<evolution>", "exec")
+            except SyntaxError as e:
+                _mb_log("system",
+                         f"Attempt {attempt + 1}: standalone syntax error: {e}")
+                current_prompt = (
+                    f"Your code had a syntax error: {e}\n"
+                    f"Fix the code and respond with the corrected JSON. "
+                    f"Use only double quotes for strings. "
+                    f"Make sure all strings and brackets are properly closed.\n\n"
+                    + prompt
+                )
+                continue
+
+            # Check 2: In-file-context syntax
+            ok, err = _validate_in_file_context(code)
+            if not ok:
+                _mb_log("system",
+                         f"Attempt {attempt + 1}: in-context syntax error: {err}")
+                current_prompt = (
+                    f"Your code compiles standalone but causes a syntax error "
+                    f"when inserted into the main file: {err}\n"
+                    f"This usually means unescaped quotes or unclosed strings. "
+                    f"Fix the code. Use only double quotes. "
+                    f"Avoid triple-quoted strings. Keep it simple.\n\n"
+                    + prompt
+                )
+                continue
+
+            # Check 3: Dangerous ops
+            dangerous = [
+                "os.remove", "shutil.rmtree", "eval(", "exec(",
+                "__import__", "subprocess.call",
+            ]
+            if any(d in code for d in dangerous):
+                _mb_log("error",
+                         "Evolution code rejected: dangerous operations")
+                return
+
+            # Check 4: Duplicate
+            first_line = code.strip().split("\n")[0]
+            if first_line in current_code:
+                _mb_log("system", "Evolution skipped: code already exists")
+                return
+
+            # All checks passed — apply!
+            _mb_apply_evolution(project_root, code,
+                                evolution.get("improvement", ""),
+                                evolution.get("reason", ""), config)
             return
 
-        improvement = evolution.get("improvement", "none")
-        confidence = float(evolution.get("confidence", 0))
-        code = evolution.get("code", "")
-        reason = evolution.get("reason", "")
-
-        _mb_log("learn", f"AI suggests: {improvement} (confidence: {confidence:.0%})")
-
-        if improvement == "none" or confidence < 0.6 or not code.strip():
-            _mb_log("system", f"No evolution this cycle (confidence: {confidence:.0%})")
-            return
-
-        # Validate the code snippet
-        try:
-            compile(code, "<evolution>", "exec")
-        except SyntaxError as e:
-            _mb_log("error", f"Evolution code has syntax error: {e}")
-            return
-
-        # Check code isn't malicious (no os.remove, no eval of user input, no secrets)
-        dangerous = ["os.remove", "shutil.rmtree", "eval(", "exec(", "__import__", "subprocess.call"]
-        if any(d in code for d in dangerous):
-            _mb_log("error", "Evolution code rejected: contains dangerous operations")
-            return
-
-        # Check it doesn't duplicate existing code
-        first_line = code.strip().split("\n")[0]
-        if first_line in current_code:
-            _mb_log("system", "Evolution skipped: code already exists")
-            return
-
-        # ── Apply the evolution ──
-        _mb_apply_evolution(project_root, code, improvement, reason, config)
+        # All attempts exhausted
+        _mb_log("system",
+                 f"Evolution failed after {max_attempts} attempts")
 
     except Exception as e:
         _mb_log("error", f"Evolution analysis failed: {str(e)[:150]}")
@@ -5731,7 +5812,8 @@ def sandbox_evolution(project_root, code, improvement, reason, config):
             content = f.read()
 
         marker = '@socketio.on("connect")'
-        if marker not in content:
+        idx = content.rfind(marker)
+        if idx == -1:
             details["reason_rejected"] = "Insertion marker not found"
             return False, details
 
@@ -5742,7 +5824,7 @@ def sandbox_evolution(project_root, code, improvement, reason, config):
             f"# Reason: {reason[:100]}\n"
             f"{code}\n\n"
         )
-        new_content = content.replace(marker, evolution_block + marker)
+        new_content = content[:idx] + evolution_block + content[idx:]
 
         # 3. Write modified file to sandbox
         with open(sandbox_file, "w", encoding="utf-8") as f:
