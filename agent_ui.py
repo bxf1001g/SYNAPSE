@@ -3239,26 +3239,25 @@ def _tg_handle_command(text):
 
 
 def _tg_poll_loop():
-    """Background thread: poll Telegram for new messages."""
+    """Background task: poll Telegram for new messages.
+
+    Uses socketio.sleep instead of time.sleep for eventlet compatibility.
+    """
     global _tg_active, _TG_LAST_UPDATE_ID
     _tg_active = True
     _consecutive_errors = 0
-    import sys
-    sys.stderr.write("[TG] Poll loop thread started\n")
-    sys.stderr.flush()
 
-    # Send startup notification
-    sys.stderr.write("[TG] Attempting startup message...\n")
-    sys.stderr.flush()
-    sent_ok = _tg_send(
-        "SYNAPSE Telegram bridge started.\nSend /start for commands."
-    )
-    sys.stderr.write(f"[TG] Startup message result: {sent_ok}\n")
-    sys.stderr.flush()
-    _tg_log_event("out", "Bridge started")
-    if not sent_ok:
-        sys.stderr.write("[TG] WARNING: startup message failed to send\n")
-        sys.stderr.flush()
+    print("[TG] Poll loop started", flush=True)
+
+    # Send startup notification (non-blocking: failures don't stop polling)
+    try:
+        sent_ok = _tg_send(
+            "SYNAPSE Telegram bridge started.\nSend /start for commands."
+        )
+        print(f"[TG] Startup message sent: {sent_ok}", flush=True)
+        _tg_log_event("out", "Bridge started")
+    except Exception as exc:
+        print(f"[TG] Startup message error (non-fatal): {exc}", flush=True)
 
     while _tg_active:
         try:
@@ -3267,9 +3266,9 @@ def _tg_poll_loop():
                 msg = _tg_event_queue.pop(0)
                 _tg_send(msg)
                 _tg_log_event("out", msg[:100])
-                time.sleep(0.5)
+                socketio.sleep(0.5)
 
-            # Poll for new messages using urllib (eventlet-safe)
+            # Poll for new messages
             offset = _TG_LAST_UPDATE_ID + 1
             poll_url = (
                 f"https://api.telegram.org/bot{_TG_TOKEN}/getUpdates"
@@ -3285,13 +3284,14 @@ def _tg_poll_loop():
                     f"[TG] 409 conflict, backing off {backoff:.0f}s",
                     flush=True,
                 )
-                time.sleep(backoff)
+                socketio.sleep(backoff)
                 continue
             if status != 200:
                 print(
-                    f"[TG] getUpdates HTTP {status}", flush=True
+                    f"[TG] getUpdates HTTP {status}: {result}",
+                    flush=True,
                 )
-                time.sleep(_TG_POLL_INTERVAL)
+                socketio.sleep(_TG_POLL_INTERVAL)
                 continue
 
             data = result.get("data", {})
@@ -3326,19 +3326,22 @@ def _tg_poll_loop():
                 flush=True,
             )
             if _consecutive_errors > 10:
-                time.sleep(30)  # back off on repeated failures
-        time.sleep(_TG_POLL_INTERVAL)
+                socketio.sleep(30)
+        socketio.sleep(_TG_POLL_INTERVAL)
 
 
 def _start_telegram():
-    """Start the Telegram bot polling loop."""
+    """Start the Telegram bot polling loop using socketio background task.
+
+    Uses socketio.start_background_task for proper eventlet integration.
+    """
     global _tg_thread
     if not _TG_TOKEN or not _TG_CHAT_ID:
         return {"status": "not_configured", "message": "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID"}
-    if _tg_thread and _tg_thread.is_alive():
+    if _tg_active:
         return {"status": "already_running"}
-    _tg_thread = threading.Thread(target=_tg_poll_loop, daemon=True, name="telegram-bot")
-    _tg_thread.start()
+    print("[TG] Starting Telegram bot via socketio.start_background_task", flush=True)
+    _tg_thread = socketio.start_background_task(_tg_poll_loop)
     return {"status": "started"}
 
 
@@ -3600,10 +3603,10 @@ def _dream_consolidation_phase(memory_obj):
 
 
 def _dream_cycle():
-    """Background thread: consciousness dream cycle — runs every hour."""
+    """Background task: consciousness dream cycle — runs every 15 min."""
     global _dream_active
     _dream_active = True
-    time.sleep(60)  # Initial delay to let system stabilize
+    socketio.sleep(60)  # Initial delay to let system stabilize
 
     # Seed initial memories so dreams have material from the start
     try:
@@ -3631,7 +3634,7 @@ def _dream_cycle():
 
     while _dream_active:
         try:
-            time.sleep(_DREAM_INTERVAL)
+            socketio.sleep(_DREAM_INTERVAL)
             if not _dream_active:
                 break
 
@@ -3649,13 +3652,13 @@ def _dream_cycle():
             rem_insights = _dream_rem_phase(mem)
             dream_result["phases"]["rem"] = {"insights_found": len(rem_insights), "insights": rem_insights}
 
-            time.sleep(2)
+            socketio.sleep(2)
 
             # Phase 2: Deep Sleep — Pattern extraction
             deep_result = _dream_deep_sleep_phase(mem)
             dream_result["phases"]["deep_sleep"] = deep_result or {}
 
-            time.sleep(2)
+            socketio.sleep(2)
 
             # Phase 3: Consolidation — Decay + Pruning
             consolidation = _dream_consolidation_phase(mem)
@@ -3683,12 +3686,11 @@ def _dream_cycle():
 
 
 def _start_dream_cycle():
-    """Start the consciousness dream cycle background thread."""
+    """Start the consciousness dream cycle as a socketio background task."""
     global _dream_thread
-    if _dream_thread and _dream_thread.is_alive():
+    if _dream_active:
         return {"status": "already_running"}
-    _dream_thread = threading.Thread(target=_dream_cycle, daemon=True, name="consciousness-dream")
-    _dream_thread.start()
+    _dream_thread = socketio.start_background_task(_dream_cycle)
     _consciousness_event("dream_thread_started", "Consciousness dream cycle activated")
     return {"status": "started", "interval": _DREAM_INTERVAL}
 
@@ -3812,7 +3814,7 @@ def _self_heal_loop():
 
     while _healing_active:
         try:
-            time.sleep(_HEAL_CHECK_INTERVAL)
+            socketio.sleep(_HEAL_CHECK_INTERVAL)
             if not _healing_active:
                 break
 
@@ -3950,7 +3952,7 @@ def _self_heal_loop():
                 "action": "heal_loop_error",
                 "error": str(e)[:300],
             })
-            time.sleep(60)  # Back off on errors
+            socketio.sleep(60)  # Back off on errors
 
     # Trim healing log
     while len(_healing_log) > _HEALING_LOG_MAX:
@@ -4147,12 +4149,11 @@ def _apply_heal_fix(project_root, files, fix_data, config):
 
 
 def _start_healing_loop():
-    """Start the self-healing background thread."""
+    """Start the self-healing as a socketio background task."""
     global _healing_thread
-    if _healing_thread and _healing_thread.is_alive():
+    if _healing_active:
         return
-    _healing_thread = threading.Thread(target=_self_heal_loop, daemon=True, name="synapse-healer")
-    _healing_thread.start()
+    _healing_thread = socketio.start_background_task(_self_heal_loop)
 
 
 @app.route("/api/healing")
@@ -4236,7 +4237,7 @@ def _pr_monitor_loop():
     """Background loop: check for open PRs, review, and auto-merge trusted ones."""
     global _pr_monitor_active
     _pr_monitor_active = True
-    time.sleep(15)  # Initial delay
+    socketio.sleep(15)  # Initial delay
     _pr_log_entry("PR monitor started — checking every 10 min")
 
     while _pr_monitor_active:
@@ -4244,14 +4245,14 @@ def _pr_monitor_loop():
             repo = _get_github_repo()
             if not repo:
                 _pr_log_entry("No GitHub repo access — check GITHUB_TOKEN", "warn")
-                time.sleep(_PR_CHECK_INTERVAL)
+                socketio.sleep(_PR_CHECK_INTERVAL)
                 continue
 
             open_prs = list(repo.get_pulls(state="open", sort="updated", direction="desc"))
 
             if not open_prs:
                 _pr_log_entry("No open PRs")
-                time.sleep(_PR_CHECK_INTERVAL)
+                socketio.sleep(_PR_CHECK_INTERVAL)
                 continue
 
             _pr_log_entry(f"Found {len(open_prs)} open PR(s)")
@@ -4286,9 +4287,7 @@ def _pr_monitor_loop():
         except Exception as e:
             _pr_log_entry(f"PR monitor error: {e}", "error")
 
-        time.sleep(_PR_CHECK_INTERVAL)
-
-
+        socketio.sleep(_PR_CHECK_INTERVAL)
 def _auto_review_and_merge(repo, pr):
     """Review a trusted PR using AI, then merge if it looks safe."""
     pr_num = pr.number
@@ -4383,12 +4382,11 @@ def _auto_review_and_merge(repo, pr):
 
 
 def _start_pr_monitor():
-    """Start the PR monitor background thread."""
+    """Start the PR monitor as a socketio background task."""
     global _pr_monitor_thread
-    if _pr_monitor_thread and _pr_monitor_thread.is_alive():
+    if _pr_monitor_active:
         return {"status": "already_running"}
-    _pr_monitor_thread = threading.Thread(target=_pr_monitor_loop, daemon=True, name="pr-monitor")
-    _pr_monitor_thread.start()
+    _pr_monitor_thread = socketio.start_background_task(_pr_monitor_loop)
     return {"status": "started"}
 
 
@@ -4531,7 +4529,7 @@ def _mb_heartbeat():
     _moltbook_active = True
 
     # Initial delay
-    time.sleep(10)
+    socketio.sleep(10)
     _mb_log("system", "Moltbook heartbeat started")
 
     while _moltbook_active:
@@ -4540,12 +4538,12 @@ def _mb_heartbeat():
             status = _mb_request("GET", "/agents/status")
             if not status:
                 _mb_log("error", "Cannot reach Moltbook API")
-                time.sleep(_MOLTBOOK_INTERVAL)
+                socketio.sleep(_MOLTBOOK_INTERVAL)
                 continue
 
             if status.get("status") == "pending_claim":
                 _mb_log("system", "Waiting to be claimed on Moltbook...")
-                time.sleep(_MOLTBOOK_INTERVAL)
+                socketio.sleep(_MOLTBOOK_INTERVAL)
                 continue
 
             # 2. Check home dashboard
@@ -4602,7 +4600,7 @@ def _mb_heartbeat():
             _mb_log("error", f"Heartbeat error: {e}")
             _tg_notify("error", f"Moltbook heartbeat error: {str(e)[:200]}")
 
-        time.sleep(_MOLTBOOK_INTERVAL)
+        socketio.sleep(_MOLTBOOK_INTERVAL)
 
 
 def _mb_engage_post(post_id):
@@ -5290,12 +5288,11 @@ def _mb_generate_reply(text, context_type="reply", author="someone"):
 
 
 def _start_moltbook():
-    """Start the Moltbook heartbeat thread."""
+    """Start the Moltbook heartbeat as a socketio background task."""
     global _moltbook_thread
-    if _moltbook_thread and _moltbook_thread.is_alive():
+    if _moltbook_active:
         return {"status": "already_running"}
-    _moltbook_thread = threading.Thread(target=_mb_heartbeat, daemon=True, name="moltbook-heartbeat")
-    _moltbook_thread.start()
+    _moltbook_thread = socketio.start_background_task(_mb_heartbeat)
     return {"status": "started"}
 
 
@@ -5412,7 +5409,7 @@ def api_trigger_dream():
         _consciousness_identity["dream_insights_total"] += len(rem)
         _consciousness_identity["last_dream"] = datetime.now().isoformat()
         _consciousness_event("dream_complete", "🌅 Manual dream complete", {"insights": len(rem)})
-    threading.Thread(target=_manual_dream, daemon=True).start()
+    socketio.start_background_task(_manual_dream)
     return json.dumps({"status": "dream_triggered"})
 
 
@@ -6296,10 +6293,9 @@ def _ensure_cron_thread():
                 if _cron_should_run(job, now):
                     job["last_run"] = now.isoformat()
                     _spawn_webhook_task(job["task"], job["id"])
-            time.sleep(60)
+            socketio.sleep(60)
 
-    _cron_thread = threading.Thread(target=_cron_loop, daemon=True)
-    _cron_thread.start()
+    socketio.start_background_task(_cron_loop)
 
 
 def _cron_should_run(job, now):
