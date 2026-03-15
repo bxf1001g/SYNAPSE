@@ -2765,21 +2765,46 @@ _TG_LOG_MAX = 50
 _tg_event_queue = []         # Events waiting to be sent
 
 
+def _tg_http(method, url, payload=None, timeout=15):
+    """Make HTTP request using urllib (eventlet-safe, no requests dep)."""
+    import urllib.error
+    import urllib.request
+    try:
+        data = json.dumps(payload).encode("utf-8") if payload else None
+        req = urllib.request.Request(
+            url, data=data,
+            headers={"Content-Type": "application/json"} if data else {},
+            method=method,
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8")
+            return {"status": resp.status, "data": json.loads(body)}
+    except urllib.error.HTTPError as e:
+        return {"status": e.code, "data": {}}
+    except Exception as exc:
+        return {"status": 0, "error": str(exc)}
+
+
 def _tg_send(text, parse_mode=None):
     """Send a message to the owner via Telegram."""
-    if not _TG_TOKEN or not _TG_CHAT_ID or not _requests_available:
+    if not _TG_TOKEN or not _TG_CHAT_ID:
         return False
     try:
         payload = {"chat_id": _TG_CHAT_ID, "text": text[:4000]}
         if parse_mode:
             payload["parse_mode"] = parse_mode
-        resp = _requests.post(
+        result = _tg_http(
+            "POST",
             f"https://api.telegram.org/bot{_TG_TOKEN}/sendMessage",
-            json=payload, timeout=15
+            payload, timeout=15,
         )
-        ok = resp.status_code == 200 and resp.json().get("ok", False)
+        ok = result.get("status") == 200 and result.get(
+            "data", {}
+        ).get("ok", False)
         if not ok:
-            print(f"[TG] sendMessage failed: {resp.status_code}", flush=True)
+            print(
+                f"[TG] sendMessage failed: {result}", flush=True
+            )
         return ok
     except Exception as exc:
         print(f"[TG] sendMessage error: {exc}", flush=True)
@@ -2982,33 +3007,32 @@ def _tg_poll_loop():
                 _tg_log_event("out", msg[:100])
                 time.sleep(0.5)
 
-            if not _requests_available or _requests is None:
-                print("[TG] requests library not available", flush=True)
-                time.sleep(30)
-                continue
-
-            # Poll for new messages (short poll to avoid eventlet issues)
-            params = {"timeout": 5, "offset": _TG_LAST_UPDATE_ID + 1}
-            resp = _requests.get(
-                f"https://api.telegram.org/bot{_TG_TOKEN}/getUpdates",
-                params=params, timeout=10
+            # Poll for new messages using urllib (eventlet-safe)
+            offset = _TG_LAST_UPDATE_ID + 1
+            poll_url = (
+                f"https://api.telegram.org/bot{_TG_TOKEN}/getUpdates"
+                f"?timeout=5&offset={offset}"
             )
-            if resp.status_code == 409:
-                # Another instance is polling; back off and retry
+            result = _tg_http("GET", poll_url, timeout=10)
+            status = result.get("status", 0)
+
+            if status == 409:
                 import random
                 backoff = random.uniform(3, 10)
-                print(f"[TG] 409 conflict, backing off {backoff:.0f}s",
-                      flush=True)
+                print(
+                    f"[TG] 409 conflict, backing off {backoff:.0f}s",
+                    flush=True,
+                )
                 time.sleep(backoff)
                 continue
-            if resp.status_code != 200:
+            if status != 200:
                 print(
-                    f"[TG] getUpdates HTTP {resp.status_code}", flush=True
+                    f"[TG] getUpdates HTTP {status}", flush=True
                 )
                 time.sleep(_TG_POLL_INTERVAL)
                 continue
 
-            data = resp.json()
+            data = result.get("data", {})
             updates = data.get("result", [])
             if updates:
                 print(
