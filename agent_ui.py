@@ -3411,7 +3411,7 @@ _metacognition_grades = []        # Self-evaluation history
 _METACOGNITION_MAX = 100
 _dream_thread = None
 _dream_active = False
-_DREAM_INTERVAL = 3600            # 1 hour between dream cycles
+_DREAM_INTERVAL = 900             # 15 min between dream cycles
 _MEMORY_DECAY_RATE = 0.95         # 5% weight decay per dream cycle
 _consciousness_identity = {
     "name": "SYNAPSE",
@@ -4421,7 +4421,7 @@ _moltbook_log = []      # Conversation log shown in UI
 _MOLTBOOK_LOG_MAX = 100
 _moltbook_thread = None
 _moltbook_active = False
-_MOLTBOOK_INTERVAL = 1800  # 30 min — avoids spam flags, saves API cost
+_MOLTBOOK_INTERVAL = 900   # 15 min — balanced between activity and rate limits
 
 
 def _mb_headers():
