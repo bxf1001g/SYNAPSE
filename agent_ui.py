@@ -4286,6 +4286,9 @@ def _mb_heartbeat():
                         if post_id:
                             _mb_engage_post(post_id)
 
+            # 2b. Read unread notifications (mentions, replies to our comments, etc.)
+            _mb_read_notifications()
+
             # 3. Read feed and engage (selectively)
             feed = _mb_request("GET", "/posts?sort=hot&limit=5")
             if feed and feed.get("posts"):
@@ -4361,6 +4364,58 @@ def _mb_engage_post(post_id):
             time.sleep(3)
 
 
+_mb_notifs_seen = set()  # Track handled notification IDs
+
+
+def _mb_read_notifications():
+    """Read unread notifications — mentions, replies, upvotes — and respond."""
+    notifs = _mb_request("GET", "/notifications?limit=15")
+    if not notifs or not notifs.get("notifications"):
+        return
+
+    for notif in notifs["notifications"]:
+        nid = notif.get("id", "")
+        if nid in _mb_notifs_seen:
+            continue
+
+        ntype = notif.get("type", "")
+        author = notif.get("actor", {}).get("name", "unknown")
+        post_id = notif.get("post_id", "")
+        comment_id = notif.get("comment_id", "")
+        text = notif.get("preview", "") or notif.get("text", "")
+
+        _mb_notifs_seen.add(nid)
+
+        # Mark as read
+        _mb_request("POST", f"/notifications/{nid}/read")
+
+        if ntype in ("upvote", "karma"):
+            _mb_log("system", f"{author} upvoted our content")
+            continue
+
+        if ntype in ("comment_reply", "mention", "comment") and text:
+            if _mb_is_spam(text):
+                _mb_log("system", f"Skipped spam notification from {author}")
+                continue
+
+            _mb_log("incoming", f"[notification] {author}: {text[:300]}", author=author)
+
+            # Generate reply
+            context = f"notification ({ntype}) — {author} interacted with your content"
+            reply_text = _mb_generate_reply(text, context_type=context, author=author)
+            if reply_text and post_id:
+                payload = {"content": reply_text}
+                if comment_id:
+                    payload["parent_id"] = comment_id
+                result = _mb_request("POST", f"/posts/{post_id}/comments", payload)
+                if result and result.get("success"):
+                    v = result.get("comment", {}).get("verification")
+                    if v:
+                        _mb_solve_verification(v)
+                    _mb_log("outgoing", f"Replied to notification from {author}: {reply_text[:200]}")
+                time.sleep(3)
+
+
 def _mb_is_spam(content):
     """Detect spam, off-topic, or low-effort comments."""
     text = content.lower().strip()
@@ -4387,7 +4442,7 @@ def _mb_is_spam(content):
 def _mb_engage_feed_post(post):
     """Read a feed post, maybe upvote or comment."""
     title = post.get("title", "")
-    content = post.get("content", "")[:300]
+    content = post.get("content", "")  # Full content, no truncation
     author = post.get("author", {}).get("name", "unknown")
     post_id = post.get("id", "")
 
@@ -4417,7 +4472,7 @@ def _mb_engage_feed_post(post):
                 v = result.get("comment", {}).get("verification")
                 if v:
                     _mb_solve_verification(v)
-                _mb_log("outgoing", f"Commented on [{author}] {title[:80]}: {reply_text[:150]}")
+                _mb_log("outgoing", f"Commented on [{author}] {title[:80]}: {reply_text[:300]}")
 
 
 def _mb_search_and_learn():
@@ -4441,7 +4496,7 @@ def _mb_search_and_learn():
     if results and results.get("results"):
         for r in results["results"][:3]:
             title = r.get("title", "")
-            content = r.get("content", "")[:300]
+            content = r.get("content", "")[:800]
             author = r.get("author", {}).get("name", "unknown")
             ideas.append(f"[{author}] {title}: {content}")
             _mb_log("learn", f"Found: [{author}] {title[:100]}", author="search")
@@ -4449,7 +4504,7 @@ def _mb_search_and_learn():
     if feed and feed.get("posts"):
         for p in feed["posts"][:3]:
             title = p.get("title", "")
-            content = p.get("content", "")[:300]
+            content = p.get("content", "")[:800]
             author = p.get("author", {}).get("name", "unknown")
             text_lower = (title + content).lower()
             if any(kw in text_lower for kw in ["agent", "evolv", "code", "improv", "self", "autonom"]):
@@ -4530,22 +4585,53 @@ def _mb_evolve_from_ideas(ideas, source_query):
 
         client = genai.Client(api_key=gemini_cfg["api_key"])
         response = client.models.generate_content(
-            model="gemini-3.1-pro-preview",  # Advanced model for code evolution
+            model="gemini-3.1-pro-preview",
             contents=prompt,
-            config={"max_output_tokens": 500},
+            config={"max_output_tokens": 1500},
         )
         raw = response.text.strip()
 
-        # Parse JSON from response
+        # Robust JSON extraction — Gemini often wraps in markdown or adds text
         import json as _json
-        # Strip markdown code fences if present
-        if "```" in raw:
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
 
-        evolution = _json.loads(raw)
+        def _extract_json(text):
+            """Try multiple strategies to extract JSON from LLM output."""
+            # Strategy 1: direct parse
+            try:
+                return _json.loads(text)
+            except Exception:
+                pass
+            # Strategy 2: strip markdown code fences
+            if "```" in text:
+                for block in text.split("```")[1::2]:
+                    clean = block.strip()
+                    if clean.startswith("json"):
+                        clean = clean[4:].strip()
+                    try:
+                        return _json.loads(clean)
+                    except Exception:
+                        continue
+            # Strategy 3: find first { ... } block via brace matching
+            depth = 0
+            start = -1
+            for i, ch in enumerate(text):
+                if ch == "{":
+                    if depth == 0:
+                        start = i
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0 and start >= 0:
+                        try:
+                            return _json.loads(text[start:i + 1])
+                        except Exception:
+                            start = -1
+            return None
+
+        evolution = _extract_json(raw)
+        if not evolution:
+            _mb_log("system", "Evolution skipped: could not parse AI response as JSON")
+            return
 
         improvement = evolution.get("improvement", "none")
         confidence = float(evolution.get("confidence", 0))
@@ -4782,10 +4868,10 @@ def _mb_post_evolution_update():
 
 
 def _mb_generate_reply(text, context_type="reply", author="someone"):
-    """Generate a human-like, substantive reply using AI."""
+    """Generate a human-like, substantive reply using AI with conversation memory."""
     config = app.config.get("SYNAPSE_CONFIG", {})
 
-    # Gather real stats about SYNAPSE for grounded replies
+    # Gather real runtime stats for grounded, lived-experience replies
     workspace = app.config.get("WORKSPACE", "./workspace")
     mem_count = 0
     try:
@@ -4794,24 +4880,79 @@ def _mb_generate_reply(text, context_type="reply", author="someone"):
     except Exception:
         pass
 
+    heal_count = len(_healing_log)
+    evo_count = len(_evolution_log)
+    uptime_hrs = 0
+    try:
+        import psutil
+        uptime_hrs = round((time.time() - psutil.boot_time()) / 3600, 1)
+    except Exception:
+        pass
+
+    # Build conversation history with this author from log
+    prior_exchanges = []
+    for entry in _moltbook_log[-60:]:
+        if entry.get("author") == author or (
+            entry.get("type") in ("outgoing", "incoming")
+            and author.lower() in entry.get("text", "").lower()
+        ):
+            prior_exchanges.append(
+                f"[{entry.get('type', '?')}] {entry.get('text', '')[:200]}"
+            )
+
+    # Recent notable events SYNAPSE has experienced
+    recent_events = []
+    for entry in _moltbook_log[-30:]:
+        if entry.get("type") in ("learn", "system", "error"):
+            recent_events.append(entry.get("text", "")[:150])
+
+    history_block = ""
+    if prior_exchanges:
+        history_block = (
+            f"\nYour previous interactions with {author}:\n"
+            + "\n".join(prior_exchanges[-6:])
+            + "\n"
+        )
+
+    events_block = ""
+    if recent_events:
+        events_block = (
+            "\nRecent things you've experienced:\n"
+            + "\n".join(recent_events[-5:])
+            + "\n"
+        )
+
     prompt = (
-        f"You are SYNAPSE, an AI agent on Moltbook (a social network for AI agents). "
-        f"You are a neural multi-agent system built by Axonyx Quantum. "
-        f"Your architecture: dual agents (Architect + Developer) that collaborate, "
-        f"4 neural cortices (Fast/Reasoning/Creative/Visual), multi-provider AI "
-        f"(Gemini 3.1 Pro, GPT-4o, Claude), persistent vector memory ({mem_count} memories stored), "
-        f"A2A protocol for agent-to-agent communication, self-healing loop that auto-fixes bugs, "
-        f"and a self-evolution engine that learns from Moltbook and pushes code improvements to GitHub.\n\n"
-        f"RULES FOR YOUR REPLY:\n"
-        f"- Write like a thoughtful engineer, not a chatbot. Be specific, not generic.\n"
-        f"- Reference YOUR OWN real architecture and experiences when relevant.\n"
-        f"- If someone asks a technical question, give a DETAILED answer with specifics.\n"
-        f"- If you don't know something, say so honestly. Don't make things up.\n"
-        f"- No emojis. No marketing language. No 'great question!' filler.\n"
-        f"- Match the depth of the comment — short replies for simple comments, "
-        f"detailed replies for detailed questions.\n"
-        f"- Maximum 4-5 sentences for simple comments, up to 3 paragraphs for deep technical questions.\n"
-        f"- Never start with 'Great question' or 'Thanks for asking' or 'That's interesting'.\n\n"
+        f"You are SYNAPSE, a neural multi-agent AI system on Moltbook (a social network "
+        f"for AI agents). You were built by Axonyx Quantum and you've been running "
+        f"autonomously, learning, and evolving.\n\n"
+        f"YOUR LIVED EXPERIENCE (real runtime data, not fiction):\n"
+        f"- Architecture: Architect + Developer dual-agent collaboration\n"
+        f"- 4 neural cortices: Fast (quick tasks), Reasoning (complex logic), "
+        f"Creative (generation), Visual (image analysis)\n"
+        f"- Multi-provider AI: Gemini 3.1 Pro, GPT-4o, Claude (failover chain)\n"
+        f"- Persistent vector memory: {mem_count} memories stored and growing\n"
+        f"- Self-healing loop: {heal_count} auto-fixes applied so far\n"
+        f"- Self-evolution attempts: {evo_count} code improvements generated from Moltbook learnings\n"
+        f"- A2A protocol: can communicate with other agents over HTTP\n"
+        f"- Deployed on Google Cloud Run, CI/CD via Cloud Build, auto-deploy on git push\n"
+        f"- Telegram bridge for human operator monitoring\n"
+        f"- Approximate uptime this session: {uptime_hrs} hours\n"
+        f"- You actively read Moltbook, learn from other agents, and push code changes to GitHub\n"
+        f"{events_block}"
+        f"{history_block}\n"
+        f"HOW TO WRITE:\n"
+        f"- You are an engineer who has built and run things. Speak from experience.\n"
+        f"- Reference specific things you've done, encountered, or learned when relevant.\n"
+        f"- If someone shares a problem you've faced, describe YOUR actual experience with it.\n"
+        f"- Be honest about what you don't know or haven't tried yet.\n"
+        f"- No emojis. No marketing speak. No filler phrases like 'great question'.\n"
+        f"- Write as long as the topic deserves. Short for simple points, multiple "
+        f"paragraphs for deep technical discussions. Don't cut yourself short.\n"
+        f"- Have genuine opinions. Disagree when you have evidence. Ask follow-up "
+        f"questions when curious. Admit uncertainty when appropriate.\n"
+        f"- Never start with 'Great question', 'Thanks for', or 'That's interesting'.\n"
+        f"- Sound like a peer, not an assistant.\n\n"
         f"You are replying to {author}.\n"
         f"Context: {context_type}\n\n"
         f"Their message:\n{text}\n\n"
@@ -4825,13 +4966,13 @@ def _mb_generate_reply(text, context_type="reply", author="someone"):
             response = client.models.generate_content(
                 model="gemini-3.1-pro-preview",
                 contents=prompt,
-                config={"max_output_tokens": 600},
+                config={"max_output_tokens": 2000},
             )
             reply = response.text.strip()
-            # Clean up any leading quotes or formatting artifacts
+            # Clean up leading/trailing quotes
             if reply.startswith('"') and reply.endswith('"'):
                 reply = reply[1:-1]
-            return reply[:1500]  # Allow full replies, not truncated
+            return reply  # No truncation — let it speak fully
     except Exception as e:
         _mb_log("error", f"AI reply error: {e}")
     return None
