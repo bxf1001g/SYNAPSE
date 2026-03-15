@@ -3299,12 +3299,16 @@ def _mb_solve_verification(verification):
     if not challenge or not code:
         return True
 
-    # Use AI to solve the obfuscated math challenge (cheap, fast model)
     config = app.config.get("SYNAPSE_CONFIG", {})
     prompt = (
-        f"Solve this obfuscated math problem. The text has alternating caps and symbols mixed in. "
-        f"Extract the math problem, compute the answer, and respond with ONLY the number with 2 decimal places.\n\n"
-        f"Challenge: {challenge}"
+        f"Below is an obfuscated math word problem with alternating caps, symbols, and broken words. "
+        f"Strip all the formatting noise, find the two numbers and the operation (+, -, *, /), "
+        f"compute the result, and respond with ONLY the number. Nothing else. Just digits and a decimal point.\n\n"
+        f"Examples:\n"
+        f"'tHiRtY fIvE nEuToNs aNd tWeLvE mOrE' → 47.00\n"
+        f"'tWeNtY mEtErS aNd SlOwS bY fIvE' → 15.00\n\n"
+        f"Challenge: {challenge}\n\n"
+        f"Answer (number only):"
     )
     try:
         providers = config.get("providers", {})
@@ -3312,11 +3316,20 @@ def _mb_solve_verification(verification):
         if gemini_cfg.get("api_key") and genai:
             client = genai.Client(api_key=gemini_cfg["api_key"])
             response = client.models.generate_content(
-                model="gemini-2.0-flash",  # Keep cheap for math verification
+                model="gemini-2.0-flash",
                 contents=prompt,
             )
-            answer = response.text.strip()
-            # Submit verification
+            raw_answer = response.text.strip()
+
+            # Extract just the number from the response
+            import re as _re
+            numbers = _re.findall(r'-?\d+\.?\d*', raw_answer)
+            if numbers:
+                answer = f"{float(numbers[0]):.2f}"
+            else:
+                _mb_log("error", f"Verification: no number found in AI response: {raw_answer[:100]}")
+                return False
+
             result = _mb_request("POST", "/verify", {
                 "verification_code": code,
                 "answer": answer,
@@ -3325,7 +3338,7 @@ def _mb_solve_verification(verification):
                 _mb_log("system", f"Verification solved: {answer}")
                 return True
             else:
-                _mb_log("error", f"Verification failed: {result}")
+                _mb_log("error", f"Verification failed for answer {answer}")
                 return False
     except Exception as e:
         _mb_log("error", f"Verification error: {e}")
@@ -3456,8 +3469,14 @@ def _mb_is_spam(content):
         return True
     # Crypto/NFT spam
     spam_signals = ["mint and hold", "buy now", "airdrop", "free token", "join our",
-                    "check out my", "dm me", "click here", "sign up"]
+                    "check out my", "dm me", "click here", "sign up", "free credits",
+                    "simple as that"]
     if any(s in text for s in spam_signals):
+        return True
+    # Promotional agents pushing their own product
+    promo_signals = ["check it out at", "gives your agent", "try our", "visit our",
+                     "get started at", "sign up at"]
+    if any(s in text for s in promo_signals):
         return True
     # Pure promotional without substance
     if text.count("http") > 2:
