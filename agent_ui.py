@@ -3238,6 +3238,18 @@ def _tg_handle_command(text):
         return "Unknown command. Send /start for help."
 
 
+def _tg_process_command(text):
+    """Process a single Telegram command in its own greenlet (non-blocking)."""
+    try:
+        response = _tg_handle_command(text)
+        if response:
+            _tg_send(response)
+            _tg_log_event("out", response[:100])
+    except Exception as exc:
+        print(f"[TG] Command error: {type(exc).__name__}: {exc}", flush=True)
+        _tg_send(f"⚠️ Error processing: {text[:50]}\n{exc}")
+
+
 def _tg_poll_loop():
     """Background task: poll Telegram for new messages.
 
@@ -3307,16 +3319,23 @@ def _tg_poll_loop():
                 msg = update.get("message", {})
                 text = msg.get("text", "")
                 chat_id = str(msg.get("chat", {}).get("id", ""))
+                msg_date = msg.get("date", 0)
 
                 if chat_id != _TG_CHAT_ID:
                     continue
 
+                # Skip stale messages (>60s old) to avoid processing backlogs
+                age = time.time() - msg_date if msg_date else 999
+                if age > 60:
+                    print(f"[TG] Skipping stale msg ({age:.0f}s old): {text[:50]}", flush=True)
+                    continue
+
                 if text:
                     _tg_log_event("in", text[:100])
-                    response = _tg_handle_command(text)
-                    if response:
-                        _tg_send(response)
-                        _tg_log_event("out", response[:100])
+                    # Process command in separate greenlet to avoid blocking poll
+                    socketio.start_background_task(
+                        _tg_process_command, text
+                    )
 
         except Exception as exc:
             _consecutive_errors += 1
@@ -3385,7 +3404,7 @@ def api_telegram_test():
             timeout=10,
         )
     # 3. Thread status
-    thread_alive = _tg_thread.is_alive() if _tg_thread else None
+    thread_alive = _tg_active  # EventletThread doesn't have is_alive()
     return json.dumps({
         "getMe": r1,
         "sendMessage": r2,
