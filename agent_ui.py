@@ -2905,7 +2905,13 @@ def _boot_background_tasks():
 
 @app.route("/health")
 def health_check():
-    """Cloud Run health check + self-diagnostic summary."""
+    """Cloud Run startup/health probe — must respond fast."""
+    return '{"status":"ok"}', 200, {"Content-Type": "application/json"}
+
+
+@app.route("/api/health-detail")
+def health_detail():
+    """Detailed health check with provider/memory diagnostics."""
     workspace = app.config.get("WORKSPACE", "./workspace")
     config = app.config.get("SYNAPSE_CONFIG", {})
 
