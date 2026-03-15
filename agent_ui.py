@@ -2974,30 +2974,26 @@ _tg_event_queue = []         # Events waiting to be sent
 
 
 def _tg_http(method, url, payload=None, timeout=15):
-    """Make HTTP request using urllib (eventlet-safe, no requests dep)."""
+    """Make HTTP request using http.client (bypasses eventlet socket patches)."""
+    import http.client
     import ssl
-    import urllib.error
-    import urllib.request
+    from urllib.parse import urlparse
     try:
         data = json.dumps(payload).encode("utf-8") if payload else None
-        req = urllib.request.Request(
-            url, data=data,
-            headers={"Content-Type": "application/json"} if data else {},
-            method=method,
-        )
-        # Explicit SSL context avoids eventlet monkey-patch corruption
+        parsed = urlparse(url)
         ctx = ssl.create_default_context()
-        resp = urllib.request.urlopen(req, timeout=timeout, context=ctx)
+        conn = http.client.HTTPSConnection(parsed.hostname, timeout=timeout,
+                                           context=ctx)
+        headers = {"Content-Type": "application/json"} if data else {}
+        path = parsed.path
+        if parsed.query:
+            path += "?" + parsed.query
+        conn.request(method, path, body=data, headers=headers)
+        resp = conn.getresponse()
         body = resp.read().decode("utf-8")
-        resp.close()
-        return {"status": resp.status, "data": json.loads(body)}
-    except urllib.error.HTTPError as e:
-        body_text = ""
-        try:
-            body_text = e.read().decode("utf-8", errors="replace")[:200]
-        except Exception:
-            pass
-        return {"status": e.code, "data": {}, "error": body_text}
+        status = resp.status
+        conn.close()
+        return {"status": status, "data": json.loads(body)}
     except Exception as exc:
         return {"status": 0, "error": f"{type(exc).__name__}: {exc}"}
 
