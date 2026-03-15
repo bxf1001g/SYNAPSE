@@ -3552,21 +3552,37 @@ def _dream_rem_phase(memory_obj):
         result = _call_ai_for_consciousness(prompt, max_tokens=400)
         if not result:
             return []
-        # Parse insights
+        # Parse insights — handle markdown fences from AI
         import json as _json
-        try:
-            parsed = _json.loads(result)
-        except Exception:
-            # Try to extract JSON from response
-            import re
-            m = re.search(r'\{.*\}', result, re.DOTALL)
-            if m:
+        clean = result.strip()
+        if "```" in clean:
+            for block in clean.split("```")[1::2]:
+                b = block.strip()
+                if b.startswith("json"):
+                    b = b[4:].strip()
                 try:
-                    parsed = _json.loads(m.group())
+                    parsed = _json.loads(b)
+                    break
                 except Exception:
-                    parsed = {"connections": [], "meta_pattern": result[:200]}
+                    continue
             else:
-                parsed = {"connections": [], "meta_pattern": result[:200]}
+                parsed = None
+        else:
+            parsed = None
+
+        if parsed is None:
+            try:
+                parsed = _json.loads(clean)
+            except Exception:
+                import re
+                m = re.search(r'\{.*\}', clean, re.DOTALL)
+                if m:
+                    try:
+                        parsed = _json.loads(m.group())
+                    except Exception:
+                        parsed = {"connections": [], "meta_pattern": ""}
+                else:
+                    parsed = {"connections": [], "meta_pattern": ""}
 
         insights = []
         for conn in parsed.get("connections", []):
@@ -3582,7 +3598,7 @@ def _dream_rem_phase(memory_obj):
                 )
 
         meta = parsed.get("meta_pattern", "")
-        if meta:
+        if meta and not meta.startswith("{") and not meta.startswith("```"):
             memory_obj.store_insight(f"DREAM META-PATTERN: {meta}", source="dream", intensity=0.8)
             _consciousness_event("dream_meta_pattern", f"Meta-pattern: {meta[:150]}")
 
@@ -5230,6 +5246,20 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
                 f"git {cmd}", shell=True, cwd=project_root,
                 capture_output=True, text=True, timeout=60,
             )
+
+    # Ensure git repo exists (Cloud Run containers don't have .git)
+    git_dir = os.path.join(project_root, ".git")
+    if not os.path.isdir(git_dir):
+        git("init")
+        repo_url = os.environ.get("GITHUB_REPO", "https://github.com/bxf1001g/SYNAPSE")
+        if token:
+            repo_url = repo_url.replace(
+                "https://github.com",
+                f"https://x-access-token:{token}@github.com"
+            )
+        git(f"remote add origin {repo_url}")
+        git("fetch origin main --depth=1")
+        git("checkout -b main origin/main")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     branch = f"synapse-evolve-{timestamp}"
