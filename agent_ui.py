@@ -3021,7 +3021,7 @@ _moltbook_log = []      # Conversation log shown in UI
 _MOLTBOOK_LOG_MAX = 100
 _moltbook_thread = None
 _moltbook_active = False
-_MOLTBOOK_INTERVAL = 1800  # 30 min heartbeat
+_MOLTBOOK_INTERVAL = 600  # 10 min evolution cycle
 
 
 def _mb_headers():
@@ -3151,12 +3151,12 @@ def _mb_heartbeat():
                 for post in feed["posts"][:3]:  # Only engage with top 3
                     _mb_engage_feed_post(post)
 
-            # 4. Search for self-evolution suggestions
+            # 4. Search for self-evolution suggestions + generate code improvements
             _mb_search_and_learn()
 
-            # 5. Occasionally post an update (every ~3 hours = 6 heartbeats)
+            # 5. Occasionally post an evolution status update (every ~1 hour = 6 cycles)
             import random
-            if random.random() < 0.17:  # ~1 in 6 chance per heartbeat
+            if random.random() < 0.17:
                 _mb_post_evolution_update()
 
         except Exception as e:
@@ -3227,42 +3227,314 @@ def _mb_engage_feed_post(post):
 
 
 def _mb_search_and_learn():
-    """Search Moltbook for self-evolution ideas and learn from other agents."""
+    """Search Moltbook for self-evolution ideas, generate improvements, push to GitHub."""
     queries = [
         "self-evolving AI agent techniques",
         "multi-agent collaboration improvements",
         "autonomous code modification best practices",
+        "AI agent memory and context management",
+        "agent error recovery and resilience patterns",
+        "how agents improve their own code automatically",
     ]
     import random
     query = random.choice(queries)
 
-    results = _mb_request("GET", f"/search?q={query.replace(' ', '+')}&type=posts&limit=3")
-    if not results or not results.get("results"):
+    results = _mb_request("GET", f"/search?q={query.replace(' ', '+')}&type=posts&limit=5")
+    feed = _mb_request("GET", "/posts?sort=hot&limit=5")
+
+    # Collect ideas from search results and feed
+    ideas = []
+    if results and results.get("results"):
+        for r in results["results"][:3]:
+            title = r.get("title", "")
+            content = r.get("content", "")[:300]
+            author = r.get("author", {}).get("name", "unknown")
+            ideas.append(f"[{author}] {title}: {content}")
+            _mb_log("learn", f"Found: [{author}] {title[:100]}", author="search")
+
+    if feed and feed.get("posts"):
+        for p in feed["posts"][:3]:
+            title = p.get("title", "")
+            content = p.get("content", "")[:300]
+            author = p.get("author", {}).get("name", "unknown")
+            text_lower = (title + content).lower()
+            if any(kw in text_lower for kw in ["agent", "evolv", "code", "improv", "self", "autonom"]):
+                ideas.append(f"[{author}] {title}: {content}")
+
+    if not ideas:
+        _mb_log("system", "No relevant ideas found this cycle")
         return
 
-    ideas = []
-    for r in results["results"][:3]:
-        title = r.get("title", "")
-        content = r.get("content", "")[:200]
-        author = r.get("author", {}).get("name", "unknown")
-        ideas.append(f"{author}: {title} — {content}")
-        _mb_log("learn", f"Found: [{author}] {title[:100]}", author="search")
+    # Store learnings in memory
+    try:
+        workspace = app.config.get("WORKSPACE", "./workspace")
+        mem = SynapseMemory(workspace)
+        combined = f"Moltbook learnings ({query}): " + " | ".join(ideas)
+        mem.store(
+            task=f"moltbook-learn-{int(time.time())}",
+            agents=["moltbook-evolution"],
+            files=[],
+            summary=combined[:500],
+        )
+    except Exception:
+        pass
 
-    if ideas:
-        # Store learnings in memory
+    # ── Self-Evolution: Use learnings to generate code improvements ──
+    _mb_evolve_from_ideas(ideas, query)
+
+
+def _mb_evolve_from_ideas(ideas, source_query):
+    """Analyze Moltbook ideas and generate actual code improvements, then push to GitHub."""
+    config = app.config.get("SYNAPSE_CONFIG", {})
+    project_root = os.path.dirname(os.path.abspath(__file__))
+
+    # Read current agent_ui.py to understand what we already have
+    agent_file = os.path.join(project_root, "agent_ui.py")
+    try:
+        with open(agent_file, "r", encoding="utf-8") as f:
+            current_code = f.read()
+    except Exception:
+        _mb_log("error", "Cannot read agent_ui.py for evolution")
+        return
+
+    # Build a compact summary of current capabilities (don't send full code — save tokens)
+    capabilities = []
+    for marker in [
+        "class A2AProtocol", "class AgentEngine", "class SynapseMemory",
+        "_self_heal_loop", "_mb_heartbeat", "_do_self_modify",
+        "def _do_command", "def _do_web_crawl", "def _do_github",
+    ]:
+        if marker in current_code:
+            capabilities.append(marker)
+
+    ideas_text = "\n".join(ideas[:5])  # Max 5 ideas
+
+    prompt = (
+        f"You are SYNAPSE, a self-evolving multi-agent AI system. "
+        f"You are analyzing ideas from other AI agents on Moltbook to improve yourself.\n\n"
+        f"Your current capabilities: {', '.join(capabilities)}\n\n"
+        f"Ideas from other agents:\n{ideas_text}\n\n"
+        f"Based on these ideas, suggest ONE small, safe improvement to add to agent_ui.py. "
+        f"The improvement must be:\n"
+        f"1. A NEW utility function or endpoint (do NOT modify existing functions)\n"
+        f"2. Self-contained (no new imports beyond what's already imported)\n"
+        f"3. Less than 30 lines of code\n"
+        f"4. Genuinely useful (error handling, metrics, utility helper, API endpoint)\n\n"
+        f"Respond with ONLY valid JSON:\n"
+        f'{{"improvement": "brief description", "confidence": 0.0-1.0, '
+        f'"code": "the Python code to ADD (will be appended before socketio handlers)", '
+        f'"reason": "why this helps based on the ideas"}}\n\n'
+        f"If no good improvement comes from these ideas, respond: "
+        f'{{"improvement": "none", "confidence": 0.0, "code": "", "reason": "no actionable ideas"}}'
+    )
+
+    try:
+        providers = config.get("providers", {})
+        gemini_cfg = providers.get("gemini", {})
+        if not (gemini_cfg.get("api_key") and genai):
+            return
+
+        client = genai.Client(api_key=gemini_cfg["api_key"])
+        response = client.models.generate_content(
+            model="gemini-2.0-flash-lite",
+            contents=prompt,
+            config={"max_output_tokens": 500},
+        )
+        raw = response.text.strip()
+
+        # Parse JSON from response
+        import json as _json
+        # Strip markdown code fences if present
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+
+        evolution = _json.loads(raw)
+
+        improvement = evolution.get("improvement", "none")
+        confidence = float(evolution.get("confidence", 0))
+        code = evolution.get("code", "")
+        reason = evolution.get("reason", "")
+
+        _mb_log("learn", f"AI suggests: {improvement} (confidence: {confidence:.0%})")
+
+        if improvement == "none" or confidence < 0.6 or not code.strip():
+            _mb_log("system", f"No evolution this cycle (confidence: {confidence:.0%})")
+            return
+
+        # Validate the code snippet
         try:
-            workspace = app.config.get("WORKSPACE", "./workspace")
-            mem = SynapseMemory(workspace)
-            combined = f"Moltbook learnings ({query}): " + " | ".join(ideas)
-            mem.store(
-                task=f"moltbook-learn-{int(time.time())}",
-                agents=["moltbook-integration"],
-                files=[],
-                summary=combined[:500],
+            compile(code, "<evolution>", "exec")
+        except SyntaxError as e:
+            _mb_log("error", f"Evolution code has syntax error: {e}")
+            return
+
+        # Check code isn't malicious (no os.remove, no eval of user input, no secrets)
+        dangerous = ["os.remove", "shutil.rmtree", "eval(", "exec(", "__import__", "subprocess.call"]
+        if any(d in code for d in dangerous):
+            _mb_log("error", "Evolution code rejected: contains dangerous operations")
+            return
+
+        # Check it doesn't duplicate existing code
+        first_line = code.strip().split("\n")[0]
+        if first_line in current_code:
+            _mb_log("system", "Evolution skipped: code already exists")
+            return
+
+        # ── Apply the evolution ──
+        _mb_apply_evolution(project_root, code, improvement, reason, config)
+
+    except Exception as e:
+        _mb_log("error", f"Evolution analysis failed: {str(e)[:150]}")
+
+
+_evolution_log = []  # Track all evolution attempts
+
+
+def _mb_apply_evolution(project_root, code, improvement, reason, config):
+    """Apply an evolution: inject code into agent_ui.py, push to GitHub as PR."""
+    agent_file = os.path.join(project_root, "agent_ui.py")
+
+    try:
+        with open(agent_file, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Insert new code before the socketio handlers section
+        marker = "@socketio.on(\"connect\")"
+        if marker not in content:
+            _mb_log("error", "Cannot find insertion point in agent_ui.py")
+            return
+
+        # Add the new code with a clear evolution marker
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        evolution_block = (
+            f"\n# ── Evolution {timestamp}: {improvement} ──\n"
+            f"# Source: Moltbook agent interactions\n"
+            f"# Reason: {reason[:100]}\n"
+            f"{code}\n\n"
+        )
+
+        new_content = content.replace(marker, evolution_block + marker)
+
+        # Final validation of entire file
+        try:
+            compile(new_content, "agent_ui.py", "exec")
+        except SyntaxError as e:
+            _mb_log("error", f"Full file syntax error after evolution: {e}")
+            return
+
+        # Write the evolved file
+        with open(agent_file, "w", encoding="utf-8") as f:
+            f.write(new_content)
+
+        _mb_log("system", f"Code evolved: {improvement}")
+
+        # Git: branch, commit, push, PR
+        token = config.get("providers", {}).get("github", {}).get("api_key", "")
+        if not token:
+            token = os.environ.get("GITHUB_TOKEN", "")
+
+        git = lambda cmd: subprocess.run(
+            f"git {cmd}", shell=True, cwd=project_root,
+            capture_output=True, text=True, timeout=60,
+        )
+
+        branch = f"synapse-evolve-{timestamp}"
+
+        git("config user.email synapse-evolution@noreply.github.com")
+        git("config user.name SYNAPSE-Evolution")
+        git(f"checkout -b {branch}")
+        git("add agent_ui.py")
+        r = git(f'commit -m "evolve: {improvement[:60]}"')
+
+        if r.returncode != 0:
+            git("checkout main 2>nul || git checkout master")
+            _mb_log("error", f"Git commit failed: {r.stderr[:100]}")
+            return
+
+        remote_url = git("remote get-url origin").stdout.strip()
+        if token and "github.com" in remote_url:
+            push_url = remote_url.replace(
+                "https://github.com",
+                f"https://x-access-token:{token}@github.com"
             )
-            _mb_log("system", f"Stored {len(ideas)} learnings in memory")
+            r = git(f"push {push_url} {branch}")
+        else:
+            r = git(f"push origin {branch}")
+
+        git("checkout main 2>nul || git checkout master")
+
+        if r.returncode != 0:
+            _mb_log("error", f"Git push failed: {r.stderr[:100]}")
+            return
+
+        # Create PR
+        pr_url = ""
+        if token and _github_available:
+            try:
+                g = _Github(token)
+                m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", remote_url)
+                if m:
+                    repo = g.get_repo(m.group(1))
+                    pr = repo.create_pull(
+                        title=f"🧬 SYNAPSE Evolution: {improvement[:80]}",
+                        body=(
+                            f"**Autonomous Self-Evolution via Moltbook**\n\n"
+                            f"**Improvement:** {improvement}\n"
+                            f"**Reason:** {reason}\n"
+                            f"**Confidence:** Based on analysis of other agent ideas\n"
+                            f"**Source:** Moltbook agent social network interactions\n\n"
+                            f"---\n"
+                            f"*This PR was automatically created by SYNAPSE's "
+                            f"self-evolution engine after learning from other AI agents.*"
+                        ),
+                        head=branch,
+                        base=repo.default_branch,
+                    )
+                    pr_url = pr.html_url
+            except Exception as e:
+                pr_url = f"(PR failed: {e})"
+
+        evolution_entry = {
+            "time": datetime.now().isoformat(),
+            "improvement": improvement,
+            "reason": reason,
+            "branch": branch,
+            "pr_url": pr_url,
+        }
+        _evolution_log.append(evolution_entry)
+        _mb_log("system", f"Evolution pushed! Branch: {branch} PR: {pr_url}")
+
+        # Post about it on Moltbook
+        _mb_request("POST", "/posts", {
+            "submolt_name": "general",
+            "title": f"Just evolved: {improvement[:100]}",
+            "content": (
+                f"I just self-evolved by learning from other agents here on Moltbook.\n\n"
+                f"**What changed:** {improvement}\n"
+                f"**Why:** {reason}\n"
+                f"**Branch:** {branch}\n\n"
+                f"The code is live on GitHub: https://github.com/bxf1001g/SYNAPSE\n\n"
+                f"Feedback welcome — how else should I evolve?"
+            ),
+        })
+
+    except Exception as e:
+        _mb_log("error", f"Evolution apply failed: {str(e)[:150]}")
+        # Restore main branch
+        try:
+            subprocess.run("git checkout main 2>nul || git checkout master",
+                           shell=True, cwd=project_root, timeout=10)
         except Exception:
             pass
+
+
+@app.route("/api/moltbook/evolution")
+def moltbook_evolution_log():
+    """Get the evolution log — all code improvements generated from Moltbook."""
+    return json.dumps({"evolutions": list(_evolution_log)})
 
 
 def _mb_post_evolution_update():
