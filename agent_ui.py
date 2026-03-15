@@ -3009,94 +3009,37 @@ _tg_event_queue = []         # Events waiting to be sent
 
 
 def _tg_http(method, url, payload=None, timeout=8):
-    """HTTP request using raw C-level sockets via eventlet.tpool.
+    """HTTP request via subprocess+curl in eventlet.tpool.
 
-    eventlet monkey-patches socket/ssl at the Python level, but cannot
-    touch the C extension modules (_socket, _ssl).  We build the TCP
-    connection from _socket directly, wrap with real ssl, and run
-    everything inside tpool so the event loop never blocks.
+    Runs curl in a completely separate process with its own network stack,
+    completely bypassing eventlet's monkey-patched socket/ssl modules.
+    tpool.execute prevents the subprocess from blocking the event loop.
     """
-    import _socket as _csock
-    from urllib.parse import urlparse
+    import subprocess
 
-    def _do():
-        try:
-            from eventlet.patcher import original
-            _real_ssl = original("ssl")
-        except Exception:
-            import ssl as _real_ssl
-
-        parsed = urlparse(url)
-        host = parsed.hostname
-        port = parsed.port or 443
-        path = parsed.path
-        if parsed.query:
-            path += "?" + parsed.query
-
-        body_bytes = None
+    def _do_curl():
+        cmd = ["curl", "-sS", "--connect-timeout", "5",
+               "--max-time", str(timeout), "-X", method.upper()]
         if payload:
-            body_bytes = json.dumps(payload).encode()
-
-        # Resolve hostname using C-level getaddrinfo
-        addrs = _csock.getaddrinfo(host, port, _csock.AF_INET, _csock.SOCK_STREAM)
-        # Create raw TCP socket from C extension (eventlet can't patch this)
-        raw_sock = _csock.socket(_csock.AF_INET, _csock.SOCK_STREAM)
-        raw_sock.settimeout(timeout)
-        raw_sock.connect(addrs[0][4])
-
-        ctx = _real_ssl.create_default_context()
-        conn = ctx.wrap_socket(raw_sock, server_hostname=host)
-        try:
-            req_line = f"{method.upper()} {path} HTTP/1.1\r\n"
-            headers = f"Host: {host}\r\nConnection: close\r\n"
-            if body_bytes:
-                headers += "Content-Type: application/json\r\n"
-                headers += f"Content-Length: {len(body_bytes)}\r\n"
-            raw_req = (req_line + headers + "\r\n").encode()
-            if body_bytes:
-                raw_req += body_bytes
-
-            conn.sendall(raw_req)
-
-            # Read full response
-            chunks = []
-            while True:
-                chunk = conn.recv(8192)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-            raw_resp = b"".join(chunks)
-        finally:
-            conn.close()
-
-        # Parse HTTP response
-        header_end = raw_resp.find(b"\r\n\r\n")
-        status_line = raw_resp[:raw_resp.find(b"\r\n")].decode()
-        status_code = int(status_line.split()[1])
-        body = raw_resp[header_end + 4:]
-        # Handle chunked transfer encoding
-        resp_headers = raw_resp[:header_end].decode().lower()
-        if "transfer-encoding: chunked" in resp_headers:
-            decoded = []
-            pos = 0
-            while pos < len(body):
-                nl = body.find(b"\r\n", pos)
-                if nl == -1:
-                    break
-                chunk_size = int(body[pos:nl], 16)
-                if chunk_size == 0:
-                    break
-                decoded.append(body[nl + 2:nl + 2 + chunk_size])
-                pos = nl + 2 + chunk_size + 2
-            body = b"".join(decoded)
-        return {"status": status_code, "data": json.loads(body)}
+            cmd += ["-H", "Content-Type: application/json",
+                    "-d", json.dumps(payload)]
+        cmd.append(url)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout + 5
+        )
+        if result.returncode != 0:
+            err = (result.stderr or "unknown error")[:200]
+            return {"status": 0, "error": f"curl exit {result.returncode}: {err}"}
+        body = json.loads(result.stdout)
+        status = 200 if body.get("ok") else 400
+        return {"status": status, "data": body}
 
     try:
         try:
             import eventlet.tpool
-            return eventlet.tpool.execute(_do)
+            return eventlet.tpool.execute(_do_curl)
         except ImportError:
-            return _do()
+            return _do_curl()
     except Exception as exc:
         return {"status": 0, "error": f"{type(exc).__name__}: {exc}"}
 
