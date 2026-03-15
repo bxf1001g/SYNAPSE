@@ -2975,6 +2975,7 @@ _tg_event_queue = []         # Events waiting to be sent
 
 def _tg_http(method, url, payload=None, timeout=15):
     """Make HTTP request using urllib (eventlet-safe, no requests dep)."""
+    import ssl
     import urllib.error
     import urllib.request
     try:
@@ -2984,7 +2985,9 @@ def _tg_http(method, url, payload=None, timeout=15):
             headers={"Content-Type": "application/json"} if data else {},
             method=method,
         )
-        resp = urllib.request.urlopen(req, timeout=timeout)
+        # Explicit SSL context avoids eventlet monkey-patch corruption
+        ctx = ssl.create_default_context()
+        resp = urllib.request.urlopen(req, timeout=timeout, context=ctx)
         body = resp.read().decode("utf-8")
         resp.close()
         return {"status": resp.status, "data": json.loads(body)}
