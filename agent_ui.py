@@ -3009,22 +3009,21 @@ _tg_event_queue = []         # Events waiting to be sent
 
 
 def _tg_http(method, url, payload=None, timeout=8):
-    """HTTP request via curl writing to a temp file.
+    """HTTP request via curl writing to a temp file, run in tpool.
 
-    Avoids subprocess pipes entirely — eventlet patches os.read/write which
-    corrupts Popen PIPE handling after the first call.  Instead, curl writes
-    output to a temp file which we read back with plain open().
+    eventlet patches os.waitpid (breaking Popen.poll) and os.read/write
+    (breaking PIPE).  We avoid BOTH by having curl write to a temp file
+    (-o flag) and running subprocess.run in eventlet.tpool (real OS thread
+    where waitpid works).  No pipes, no poll — just blocking wait in a
+    real thread.
     """
     import subprocess
     import tempfile
 
-    tmp = None
+    tmp_path = None
     try:
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        )
-        tmp_path = tmp.name
-        tmp.close()
+        fd, tmp_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
 
         cmd = ["curl", "-sS", "--connect-timeout", "5",
                "--max-time", str(timeout), "-X", method.upper(),
@@ -3034,33 +3033,21 @@ def _tg_http(method, url, payload=None, timeout=8):
                     "-d", json.dumps(payload)]
         cmd.append(url)
 
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
-        )
+        def _run():
+            return subprocess.run(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                timeout=timeout + 5
+            )
 
-        # Poll loop: yield to eventlet while curl runs
-        deadline = time.time() + timeout + 5
-        while proc.poll() is None:
-            if time.time() > deadline:
-                proc.kill()
-                proc.wait()
-                return {"status": 0, "error": "curl timeout (poll deadline)"}
-            try:
-                socketio.sleep(0.2)
-            except Exception:
-                time.sleep(0.2)
+        try:
+            import eventlet.tpool
+            result = eventlet.tpool.execute(_run)
+        except ImportError:
+            result = _run()
 
-        if proc.returncode != 0:
-            err = ""
-            try:
-                err = proc.stderr.read().decode(errors="replace")[:200]
-            except Exception:
-                pass
-            proc.stderr.close()
-            proc.wait()
-            return {"status": 0, "error": f"curl exit {proc.returncode}: {err}"}
-        proc.stderr.close()
-        proc.wait()
+        if result.returncode != 0:
+            err = (result.stderr or b"").decode(errors="replace")[:200]
+            return {"status": 0, "error": f"curl exit {result.returncode}: {err}"}
 
         with open(tmp_path, "r", encoding="utf-8") as f:
             body = json.loads(f.read())
@@ -3069,9 +3056,9 @@ def _tg_http(method, url, payload=None, timeout=8):
     except Exception as exc:
         return {"status": 0, "error": f"{type(exc).__name__}: {exc}"}
     finally:
-        if tmp:
+        if tmp_path:
             try:
-                os.unlink(tmp.name)
+                os.unlink(tmp_path)
             except Exception:
                 pass
 
