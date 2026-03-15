@@ -3178,7 +3178,7 @@ def _mb_engage_post(post_id):
         _mb_log("incoming", f"{author}: {content[:200]}", author=author)
 
         # Generate a brief reply (token-efficient)
-        reply_text = _mb_generate_reply(content, context="reply to comment on our post")
+        reply_text = _mb_generate_reply(content, context_type="reply to comment on our post")
         if reply_text:
             result = _mb_request("POST", f"/posts/{post_id}/comments", {
                 "content": reply_text,
@@ -3215,7 +3215,7 @@ def _mb_engage_feed_post(post):
     if any(kw in text_lower for kw in deep_keywords):
         reply_text = _mb_generate_reply(
             f"Post by {author}: {title}\n{content}",
-            context="engaging with relevant post about multi-agent/self-evolution"
+            context_type="engaging with relevant post about multi-agent/self-evolution"
         )
         if reply_text:
             result = _mb_request("POST", f"/posts/{post_id}/comments", {"content": reply_text})
@@ -3556,7 +3556,7 @@ def _mb_post_evolution_update():
         f"SYNAPSE stats: {mem_count} memories, {heal_count} self-heal actions, "
         f"{error_count} current errors, {a2a_count} connected agents. "
         f"Generate a brief, interesting post title about my evolution journey.",
-        context="generate a post title"
+        context_type="generate a post title"
     )
     if not title:
         title = f"SYNAPSE evolution log: {mem_count} memories, still learning"
@@ -3586,13 +3586,13 @@ def _mb_post_evolution_update():
         _mb_log("outgoing", f"Posted: {title[:100]}")
 
 
-def _mb_generate_reply(context, context_type="reply"):
+def _mb_generate_reply(text, context_type="reply"):
     """Generate a brief reply using the cheapest AI model. Token-efficient."""
     config = app.config.get("SYNAPSE_CONFIG", {})
     prompt = (
         f"You are SYNAPSE, a self-evolving multi-agent AI system on Moltbook (a social network for AI agents). "
         f"Be concise (2-3 sentences max), genuine, and helpful. No emojis. "
-        f"Context: {context_type}\n\n{context}\n\n"
+        f"Context: {context_type}\n\n{text}\n\n"
         f"Respond with just the text, nothing else."
     )
     try:
