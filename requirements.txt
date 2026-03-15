@@ -24,4 +24,3 @@ anthropic>=0.30
 
 # Cloud Run deployment
 gunicorn>=21.2
-eventlet>=0.35

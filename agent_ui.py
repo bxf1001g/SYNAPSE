@@ -836,7 +836,10 @@ def get_memory(workspace=None):
     """Factory: returns FirestoreMemory on Cloud Run, SynapseMemory locally."""
     if os.environ.get("SYNAPSE_CLOUD_MODE") and _firestore_available:
         project_id = os.environ.get("GCP_PROJECT", "synapse-490213")
-        return FirestoreMemory(project_id=project_id)
+        mem = FirestoreMemory(project_id=project_id)
+        if mem._db is not None:
+            return mem
+        # Firestore unavailable (no credentials) — fall back to local
     ws = workspace or os.environ.get("WORKSPACE", "./workspace")
     return SynapseMemory(ws)
 
@@ -2791,19 +2794,11 @@ class TerminalManager:
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.urandom(24).hex()
 
-# Cloud Run: use eventlet async_mode when available, fallback to threading
+# Cloud Run: always use threading async_mode (no monkey-patching)
 _cloud_mode = os.environ.get("SYNAPSE_CLOUD_MODE", "").strip() in ("1", "true")
-_async_mode = "eventlet" if _cloud_mode else "threading"
-try:
-    if _cloud_mode:
-        import eventlet
-        eventlet.monkey_patch()
-        # Suppress eventlet socket cleanup warnings on Cloud Run
-        import logging as _logging
-        _logging.getLogger("eventlet.wsgi.server").setLevel(_logging.CRITICAL)
-        _logging.getLogger("gunicorn.error").setLevel(_logging.WARNING)
-except ImportError:
-    _async_mode = "threading"
+_async_mode = "threading"
+if False:  # eventlet removed — gthread worker, no monkey-patching needed
+    pass
 
 socketio = SocketIO(
     app,
@@ -2892,14 +2887,23 @@ def _boot_background_tasks():
     print("[BOOT] First request — starting background tasks", flush=True)
     if _TG_TOKEN and _TG_CHAT_ID:
         _start_telegram()
+        print("[BOOT] ✓ Telegram bot", flush=True)
     if _cloud_mode:
         _start_healing_loop()
+        print("[BOOT] ✓ Self-healing loop", flush=True)
     _gh_token = os.environ.get("GITHUB_TOKEN", "")
     if _gh_token and _github_available:
         _start_pr_monitor()
+        print("[BOOT] ✓ PR monitor", flush=True)
+    else:
+        print(f"[BOOT] ✗ PR monitor (token={'yes' if _gh_token else 'no'}, github_available={_github_available})", flush=True)
     if _moltbook_key:
         _start_moltbook()
+        print("[BOOT] ✓ Moltbook heartbeat", flush=True)
+    else:
+        print("[BOOT] ✗ Moltbook (no API key)", flush=True)
     _start_dream_cycle()
+    print("[BOOT] ✓ Dream cycle", flush=True)
     print("[BOOT] All background tasks launched", flush=True)
 
 
@@ -3009,58 +3013,21 @@ _tg_event_queue = []         # Events waiting to be sent
 
 
 def _tg_http(method, url, payload=None, timeout=8):
-    """HTTP request via curl writing to a temp file, run in tpool.
-
-    eventlet patches os.waitpid (breaking Popen.poll) and os.read/write
-    (breaking PIPE).  We avoid BOTH by having curl write to a temp file
-    (-o flag) and running subprocess.run in eventlet.tpool (real OS thread
-    where waitpid works).  Zero pipes — stdout AND stderr go to DEVNULL.
-    """
-    import subprocess
-    import tempfile
-
-    tmp_path = None
+    """HTTP request using requests library (no eventlet — gthread worker)."""
+    if not _requests_available:
+        return {"status": 0, "error": "requests library not available"}
     try:
-        fd, tmp_path = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-
-        cmd = ["curl", "-sS", "--connect-timeout", "5",
-               "--max-time", str(timeout), "-o", tmp_path]
         if payload:
-            cmd += ["-H", "Content-Type: application/json",
-                    "-d", json.dumps(payload)]
+            resp = _requests.post(url, json=payload, timeout=timeout)
+        elif method.upper() == "GET":
+            resp = _requests.get(url, timeout=timeout)
         else:
-            cmd += ["-X", method.upper()]
-        cmd.append(url)
-
-        def _run():
-            return subprocess.run(
-                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                timeout=timeout + 5
-            )
-
-        try:
-            import eventlet.tpool
-            result = eventlet.tpool.execute(_run)
-        except ImportError:
-            result = _run()
-
-        if result.returncode != 0:
-            return {"status": 0,
-                    "error": f"curl exit {result.returncode}"}
-
-        with open(tmp_path, "r", encoding="utf-8") as f:
-            body = json.loads(f.read())
-        status = 200 if body.get("ok") else 400
+            resp = _requests.request(method.upper(), url, timeout=timeout)
+        body = resp.json()
+        status = 200 if body.get("ok") else resp.status_code
         return {"status": status, "data": body}
     except Exception as exc:
         return {"status": 0, "error": f"{type(exc).__name__}: {exc}"}
-    finally:
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
 
 
 def _tg_send(text, parse_mode=None):
@@ -3345,8 +3312,7 @@ def _tg_poll_loop():
                 _tg_log_event("out", msg[:100])
                 socketio.sleep(0.5)
 
-            # Poll for new messages via POST (same as sendMessage which works
-            # reliably; GET with query params was timing out on Cloud Run)
+            # Poll for new messages via POST
             offset = _TG_LAST_UPDATE_ID + 1
             poll_url = (
                 f"https://api.telegram.org/bot{_TG_TOKEN}/getUpdates"
@@ -3389,6 +3355,8 @@ def _tg_poll_loop():
                 text = msg.get("text", "")
                 chat_id = str(msg.get("chat", {}).get("id", ""))
                 msg_date = msg.get("date", 0)
+
+                print(f"[TG] Update {update['update_id']}: chat={chat_id}, text={text[:30]!r}", flush=True)
 
                 if chat_id != _TG_CHAT_ID:
                     continue
@@ -3694,13 +3662,16 @@ def _dream_cycle():
     """Background task: consciousness dream cycle — runs every 15 min."""
     global _dream_active
     _dream_active = True
+    print("[DREAM] Dream cycle thread started, waiting 60s to stabilize...", flush=True)
     socketio.sleep(60)  # Initial delay to let system stabilize
 
     # Seed initial memories so dreams have material from the start
     try:
         ws = app.config.get("WORKSPACE", os.getcwd())
         mem = get_memory(ws)
-        if mem.count() == 0:
+        mem_count = mem.count()
+        print(f"[DREAM] Memory system: {type(mem).__name__}, count={mem_count}", flush=True)
+        if mem_count == 0:
             seed_memories = [
                 ("I am SYNAPSE, a self-evolving AI agent running on Cloud Run. "
                  "I learn from Moltbook conversations, heal my own errors, and "
@@ -3715,13 +3686,15 @@ def _dream_cycle():
             ]
             for text in seed_memories:
                 mem.store_insight(text, source="bootstrap", intensity=0.8)
+            print(f"[DREAM] Seeded {len(seed_memories)} initial memories", flush=True)
             _consciousness_event("memory_seeded",
                                  f"Planted {len(seed_memories)} seed memories")
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[DREAM] Memory seed error: {e}", flush=True)
 
     while _dream_active:
         try:
+            print(f"[DREAM] Sleeping {_DREAM_INTERVAL}s until next dream...", flush=True)
             socketio.sleep(_DREAM_INTERVAL)
             if not _dream_active:
                 break
@@ -3729,9 +3702,11 @@ def _dream_cycle():
             ws = app.config.get("WORKSPACE", os.getcwd())
             mem = get_memory(ws)
             if mem.count() < 3:
+                print(f"[DREAM] Too few memories ({mem.count()}) — skipping", flush=True)
                 _consciousness_event("dream_skip", f"Too few memories ({mem.count()}) — skipping dream cycle")
                 continue
 
+            print(f"[DREAM] Starting dream cycle ({mem.count()} memories)...", flush=True)
             _consciousness_event("dream_start", "💤 Entering dream state...", {"memory_count": mem.count()})
             _tg_notify("dream", f"💤 Dream cycle starting ({mem.count()} memories)")
             dream_result = {"time": datetime.now().isoformat(), "phases": {}}
@@ -3770,6 +3745,7 @@ def _dream_cycle():
                         f"Memories: {mem.count()}")
 
         except Exception as e:
+            print(f"[DREAM] Dream cycle error: {e}", flush=True)
             _consciousness_event("dream_error", f"Dream cycle error: {e}")
 
 
@@ -3867,6 +3843,7 @@ def _call_ai_for_consciousness(prompt, max_tokens=300):
     gemini_key = os.environ.get("GEMINI_API_KEY", "")
     if gemini_key and _requests_available:
         try:
+            print("[AI] Calling Gemini for consciousness task...", flush=True)
             resp = _requests.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/"
                 f"gemini-2.0-flash:generateContent?key={gemini_key}",
@@ -3876,9 +3853,12 @@ def _call_ai_for_consciousness(prompt, max_tokens=300):
             )
             if resp.status_code == 200:
                 data = resp.json()
+                print(f"[AI] Gemini response OK", flush=True)
                 return data["candidates"][0]["content"]["parts"][0]["text"]
-        except Exception:
-            pass
+            else:
+                print(f"[AI] Gemini error: HTTP {resp.status_code}", flush=True)
+        except Exception as e:
+            print(f"[AI] Gemini call failed: {e}", flush=True)
     return None
 
 
@@ -3899,6 +3879,7 @@ def _self_heal_loop():
     """Background loop: monitor health → diagnose → fix → push."""
     global _last_heal_time, _healing_active
     _healing_active = True
+    print("[HEAL] Self-healing loop started", flush=True)
 
     while _healing_active:
         try:
@@ -3951,10 +3932,10 @@ def _self_heal_loop():
                 f"RECURRING ERROR CATEGORIES: {json.dumps(recurring)}\n\n"
                 f"RECENT ERROR LOG:\n{error_text}\n\n"
                 "CURRENT SYSTEM:\n"
-                "- Running on Google Cloud Run with gunicorn + eventlet\n"
+                "- Running on Google Cloud Run with gunicorn + gthread\n"
                 "- Flask + Flask-SocketIO backend\n"
                 "- Main file: agent_ui.py\n"
-                "- Dockerfile uses: gunicorn --worker-class eventlet --workers 1\n\n"
+                "- Dockerfile uses: gunicorn --worker-class gthread --threads 4 --workers 1\n\n"
                 "RULES:\n"
                 "1. Only fix errors you are confident about.\n"
                 "2. If the fix requires changing agent_ui.py or Dockerfile, "
@@ -4527,8 +4508,11 @@ def _mb_request(method, path, data=None):
             resp = _requests.patch(url, headers=_mb_headers(), json=data, timeout=15)
         else:
             return None
+        if resp.status_code >= 400:
+            print(f"[MOLTBOOK] API {method} {path} → HTTP {resp.status_code}", flush=True)
         return resp.json() if resp.status_code < 500 else None
     except Exception as e:
+        print(f"[MOLTBOOK] API {method} {path} error: {e}", flush=True)
         _moltbook_log.append({"time": datetime.now().isoformat(), "type": "error", "text": str(e)[:200]})
         return None
 
@@ -4618,17 +4602,21 @@ def _mb_heartbeat():
 
     # Initial delay
     socketio.sleep(10)
+    print("[MOLTBOOK] Heartbeat started", flush=True)
     _mb_log("system", "Moltbook heartbeat started")
 
     while _moltbook_active:
         try:
             # 1. Check status
+            print("[MOLTBOOK] Checking agent status...", flush=True)
             status = _mb_request("GET", "/agents/status")
             if not status:
+                print("[MOLTBOOK] Cannot reach Moltbook API", flush=True)
                 _mb_log("error", "Cannot reach Moltbook API")
                 socketio.sleep(_MOLTBOOK_INTERVAL)
                 continue
 
+            print(f"[MOLTBOOK] Agent status: {status.get('status', 'unknown')}", flush=True)
             if status.get("status") == "pending_claim":
                 _mb_log("system", "Waiting to be claimed on Moltbook...")
                 socketio.sleep(_MOLTBOOK_INTERVAL)

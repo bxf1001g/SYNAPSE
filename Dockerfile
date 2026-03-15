@@ -23,14 +23,15 @@ ENV SYNAPSE_CLOUD_MODE=1
 
 EXPOSE ${PORT}
 
-# Single worker required for SocketIO; eventlet for async WebSocket support
+# Single worker required for SocketIO; gthread for native threading (no monkey-patching)
 # Cloud Run injects PORT env var
 # --keep-alive 65: Cloud Run LB timeout is 60s, keep server side longer
 # --access-logfile -: log all requests to stdout for Cloud Logging
 # --error-logfile -: log errors to stderr
 # --log-level warning: reduce noise, only warnings+errors
 CMD exec gunicorn \
-    --worker-class eventlet \
+    --worker-class gthread \
+    --threads 4 \
     --workers 1 \
     --bind 0.0.0.0:${PORT} \
     --timeout 300 \
