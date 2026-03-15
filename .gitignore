@@ -19,3 +19,4 @@ dist/
 build/
 .pytest_cache/
 .ruff_cache/
+downloaded-logs-20260315-151645.json

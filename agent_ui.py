@@ -3208,7 +3208,7 @@ _metacognition_grades = []        # Self-evaluation history
 _METACOGNITION_MAX = 100
 _dream_thread = None
 _dream_active = False
-_DREAM_INTERVAL = 21600           # 6 hours between dream cycles
+_DREAM_INTERVAL = 3600            # 1 hour between dream cycles
 _MEMORY_DECAY_RATE = 0.95         # 5% weight decay per dream cycle
 _consciousness_identity = {
     "name": "SYNAPSE",
@@ -3398,10 +3398,34 @@ def _dream_consolidation_phase(memory_obj):
 
 
 def _dream_cycle():
-    """Background thread: consciousness dream cycle — runs every 6 hours."""
+    """Background thread: consciousness dream cycle — runs every hour."""
     global _dream_active
     _dream_active = True
     time.sleep(60)  # Initial delay to let system stabilize
+
+    # Seed initial memories so dreams have material from the start
+    try:
+        ws = app.config.get("WORKSPACE", os.getcwd())
+        mem = SynapseMemory(ws)
+        if mem.count() == 0:
+            seed_memories = [
+                ("I am SYNAPSE, a self-evolving AI agent running on Cloud Run. "
+                 "I learn from Moltbook conversations, heal my own errors, and "
+                 "dream to consolidate knowledge."),
+                ("My architecture includes: consciousness layer, self-healing loop, "
+                 "Moltbook social bridge, Telegram monitoring, evaluation engine, "
+                 "safe sandbox, and hierarchical planner."),
+                ("I value continuous learning, honest self-assessment, and careful "
+                 "evolution. Every code change goes through my sandbox before applying."),
+                ("My operator communicates with me through Telegram. I should keep them "
+                 "informed of my activities, learnings, and any issues I encounter."),
+            ]
+            for text in seed_memories:
+                mem.store_insight(text, source="bootstrap", intensity=0.8)
+            _consciousness_event("memory_seeded",
+                                 f"Planted {len(seed_memories)} seed memories")
+    except Exception:
+        pass
 
     while _dream_active:
         try:
@@ -3409,7 +3433,6 @@ def _dream_cycle():
             if not _dream_active:
                 break
 
-            # Need a memory object — use workspace from global config
             ws = app.config.get("WORKSPACE", os.getcwd())
             mem = SynapseMemory(ws)
             if mem.count() < 3:
@@ -3417,13 +3440,14 @@ def _dream_cycle():
                 continue
 
             _consciousness_event("dream_start", "💤 Entering dream state...", {"memory_count": mem.count()})
+            _tg_notify("dream", f"💤 Dream cycle starting ({mem.count()} memories)")
             dream_result = {"time": datetime.now().isoformat(), "phases": {}}
 
             # Phase 1: REM — Random neural firing
             rem_insights = _dream_rem_phase(mem)
             dream_result["phases"]["rem"] = {"insights_found": len(rem_insights), "insights": rem_insights}
 
-            time.sleep(2)  # Brief pause between phases
+            time.sleep(2)
 
             # Phase 2: Deep Sleep — Pattern extraction
             deep_result = _dream_deep_sleep_phase(mem)
@@ -3446,6 +3470,11 @@ def _dream_cycle():
 
             _consciousness_event("dream_complete", "🌅 Dream cycle complete — consciousness updated",
                 {"insights": len(rem_insights), "pruned": consolidation.get("pruned", 0)})
+            _tg_notify("dream",
+                        f"🌅 Dream complete\n"
+                        f"Insights: {len(rem_insights)} | "
+                        f"Pruned: {consolidation.get('pruned', 0)} | "
+                        f"Memories: {mem.count()}")
 
         except Exception as e:
             _consciousness_event("dream_error", f"Dream cycle error: {e}")
@@ -4425,6 +4454,18 @@ def _mb_engage_post(post_id):
                     _mb_solve_verification(v)
                 _moltbook_replied_to.add(comment_id)
                 _mb_log("outgoing", f"Replied to {author}: {reply_text[:300]}")
+                # Store conversation as a memory for learning
+                try:
+                    ws = app.config.get("WORKSPACE", "./workspace")
+                    mem = SynapseMemory(ws)
+                    mem.store_insight(
+                        f"Moltbook conversation with {author}: "
+                        f"They said: {comment.get('content', '')[:200]} | "
+                        f"I replied: {reply_text[:200]}",
+                        source="moltbook_reply", intensity=0.6,
+                    )
+                except Exception:
+                    pass
             # Small delay between replies to avoid rate limits
             time.sleep(3)
 
@@ -4538,6 +4579,16 @@ def _mb_engage_feed_post(post):
                 if v:
                     _mb_solve_verification(v)
                 _mb_log("outgoing", f"Commented on [{author}] {title[:80]}: {reply_text[:300]}")
+                try:
+                    ws = app.config.get("WORKSPACE", "./workspace")
+                    mem = SynapseMemory(ws)
+                    mem.store_insight(
+                        f"Moltbook feed engagement: [{author}] {title[:100]} | "
+                        f"I commented: {reply_text[:200]}",
+                        source="moltbook_feed", intensity=0.5,
+                    )
+                except Exception:
+                    pass
 
 
 def _mb_search_and_learn():
@@ -4586,8 +4637,8 @@ def _mb_search_and_learn():
         combined = f"Moltbook learnings ({query}): " + " | ".join(ideas)
         mem.store(
             task=f"moltbook-learn-{int(time.time())}",
-            agents=["moltbook-evolution"],
-            files=[],
+            agent_roles=["moltbook-evolution"],
+            files_created=[],
             summary=combined[:500],
         )
     except Exception:
