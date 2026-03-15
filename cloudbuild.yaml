@@ -32,7 +32,7 @@ steps:
           --memory=1Gi \
           --cpu=1 \
           --min-instances=0 \
-          --max-instances=3 \
+          --max-instances=1 \
           --set-env-vars=SYNAPSE_CLOUD_MODE=1,GEMINI_API_KEY=${_GEMINI_API_KEY},GITHUB_TOKEN=${_GITHUB_TOKEN},MOLTBOOK_API_KEY=${_MOLTBOOK_API_KEY},TELEGRAM_BOT_TOKEN=${_TELEGRAM_BOT_TOKEN},TELEGRAM_CHAT_ID=${_TELEGRAM_CHAT_ID}
 
 options:
