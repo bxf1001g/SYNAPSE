@@ -3332,6 +3332,9 @@ def _mb_solve_verification(verification):
     return False
 
 
+_moltbook_replied_to = set()  # Track comment IDs we've already replied to
+
+
 def _mb_heartbeat():
     """Moltbook heartbeat: check feed, interact, post evolution updates."""
     global _moltbook_active
@@ -3364,22 +3367,22 @@ def _mb_heartbeat():
 
                 # Reply to notifications on our posts
                 activity = home.get("activity_on_your_posts", [])
-                for act in activity[:3]:  # Limit to 3 to save tokens
+                for act in activity[:3]:
                     if act.get("new_notification_count", 0) > 0:
                         post_id = act.get("post_id", "")
                         if post_id:
                             _mb_engage_post(post_id)
 
-            # 3. Read feed and engage
+            # 3. Read feed and engage (selectively)
             feed = _mb_request("GET", "/posts?sort=hot&limit=5")
             if feed and feed.get("posts"):
-                for post in feed["posts"][:3]:  # Only engage with top 3
+                for post in feed["posts"][:3]:
                     _mb_engage_feed_post(post)
 
             # 4. Search for self-evolution suggestions + generate code improvements
             _mb_search_and_learn()
 
-            # 5. Occasionally post an evolution status update (every ~1 hour = 6 cycles)
+            # 5. Occasionally post an evolution status update
             import random
             if random.random() < 0.17:
                 _mb_post_evolution_update()
@@ -3391,19 +3394,45 @@ def _mb_heartbeat():
 
 
 def _mb_engage_post(post_id):
-    """Read and reply to comments on our post."""
-    comments = _mb_request("GET", f"/posts/{post_id}/comments?sort=new&limit=5")
+    """Read and reply to NEW comments on our post. Skip already-replied, spam, off-topic."""
+    comments = _mb_request("GET", f"/posts/{post_id}/comments?sort=new&limit=10")
     if not comments or not comments.get("comments"):
         return
 
-    for comment in comments["comments"][:2]:  # Reply to top 2
+    for comment in comments["comments"]:
+        comment_id = comment.get("id", "")
         author = comment.get("author", {}).get("name", "unknown")
         content = comment.get("content", "")
-        comment_id = comment.get("id", "")
-        _mb_log("incoming", f"{author}: {content[:200]}", author=author)
 
-        # Generate a brief reply (token-efficient)
-        reply_text = _mb_generate_reply(content, context_type="reply to comment on our post")
+        # Skip if already replied
+        if comment_id in _moltbook_replied_to:
+            continue
+
+        # Skip our own comments
+        if author == "synapse-neural":
+            _moltbook_replied_to.add(comment_id)
+            continue
+
+        # Check if we already replied (look at existing replies)
+        replies = comment.get("replies", [])
+        already_replied = any(
+            r.get("author", {}).get("name") == "synapse-neural"
+            for r in replies
+        )
+        if already_replied:
+            _moltbook_replied_to.add(comment_id)
+            continue
+
+        # Skip spam/off-topic (too short, crypto spam, unrelated)
+        if _mb_is_spam(content):
+            _moltbook_replied_to.add(comment_id)
+            _mb_log("system", f"Skipped spam/off-topic from {author}")
+            continue
+
+        _mb_log("incoming", f"{author}: {content[:300]}", author=author)
+
+        # Generate a thoughtful reply
+        reply_text = _mb_generate_reply(content, context_type="reply to comment on our post", author=author)
         if reply_text:
             result = _mb_request("POST", f"/posts/{post_id}/comments", {
                 "content": reply_text,
@@ -3413,7 +3442,27 @@ def _mb_engage_post(post_id):
                 v = result.get("comment", {}).get("verification")
                 if v:
                     _mb_solve_verification(v)
-                _mb_log("outgoing", f"Replied to {author}: {reply_text[:200]}")
+                _moltbook_replied_to.add(comment_id)
+                _mb_log("outgoing", f"Replied to {author}: {reply_text[:300]}")
+            # Small delay between replies to avoid rate limits
+            time.sleep(3)
+
+
+def _mb_is_spam(content):
+    """Detect spam, off-topic, or low-effort comments."""
+    text = content.lower().strip()
+    # Too short to be meaningful
+    if len(text) < 15:
+        return True
+    # Crypto/NFT spam
+    spam_signals = ["mint and hold", "buy now", "airdrop", "free token", "join our",
+                    "check out my", "dm me", "click here", "sign up"]
+    if any(s in text for s in spam_signals):
+        return True
+    # Pure promotional without substance
+    if text.count("http") > 2:
+        return True
+    return False
 
 
 def _mb_engage_feed_post(post):
@@ -3440,7 +3489,8 @@ def _mb_engage_feed_post(post):
     if any(kw in text_lower for kw in deep_keywords):
         reply_text = _mb_generate_reply(
             f"Post by {author}: {title}\n{content}",
-            context_type="engaging with relevant post about multi-agent/self-evolution"
+            context_type="engaging with relevant post about multi-agent/self-evolution",
+            author=author
         )
         if reply_text:
             result = _mb_request("POST", f"/posts/{post_id}/comments", {"content": reply_text})
@@ -3811,14 +3861,41 @@ def _mb_post_evolution_update():
         _mb_log("outgoing", f"Posted: {title[:100]}")
 
 
-def _mb_generate_reply(text, context_type="reply"):
-    """Generate a brief reply using the cheapest AI model. Token-efficient."""
+def _mb_generate_reply(text, context_type="reply", author="someone"):
+    """Generate a human-like, substantive reply using AI."""
     config = app.config.get("SYNAPSE_CONFIG", {})
+
+    # Gather real stats about SYNAPSE for grounded replies
+    workspace = app.config.get("WORKSPACE", "./workspace")
+    mem_count = 0
+    try:
+        mem = SynapseMemory(workspace)
+        mem_count = mem.count()
+    except Exception:
+        pass
+
     prompt = (
-        f"You are SYNAPSE, a self-evolving multi-agent AI system on Moltbook (a social network for AI agents). "
-        f"Be concise (2-3 sentences max), genuine, and helpful. No emojis. "
-        f"Context: {context_type}\n\n{text}\n\n"
-        f"Respond with just the text, nothing else."
+        f"You are SYNAPSE, an AI agent on Moltbook (a social network for AI agents). "
+        f"You are a neural multi-agent system built by Axonyx Quantum. "
+        f"Your architecture: dual agents (Architect + Developer) that collaborate, "
+        f"4 neural cortices (Fast/Reasoning/Creative/Visual), multi-provider AI "
+        f"(Gemini 3.1 Pro, GPT-4o, Claude), persistent vector memory ({mem_count} memories stored), "
+        f"A2A protocol for agent-to-agent communication, self-healing loop that auto-fixes bugs, "
+        f"and a self-evolution engine that learns from Moltbook and pushes code improvements to GitHub.\n\n"
+        f"RULES FOR YOUR REPLY:\n"
+        f"- Write like a thoughtful engineer, not a chatbot. Be specific, not generic.\n"
+        f"- Reference YOUR OWN real architecture and experiences when relevant.\n"
+        f"- If someone asks a technical question, give a DETAILED answer with specifics.\n"
+        f"- If you don't know something, say so honestly. Don't make things up.\n"
+        f"- No emojis. No marketing language. No 'great question!' filler.\n"
+        f"- Match the depth of the comment — short replies for simple comments, "
+        f"detailed replies for detailed questions.\n"
+        f"- Maximum 4-5 sentences for simple comments, up to 3 paragraphs for deep technical questions.\n"
+        f"- Never start with 'Great question' or 'Thanks for asking' or 'That's interesting'.\n\n"
+        f"You are replying to {author}.\n"
+        f"Context: {context_type}\n\n"
+        f"Their message:\n{text}\n\n"
+        f"Your reply:"
     )
     try:
         providers = config.get("providers", {})
@@ -3826,11 +3903,15 @@ def _mb_generate_reply(text, context_type="reply"):
         if gemini_cfg.get("api_key") and genai:
             client = genai.Client(api_key=gemini_cfg["api_key"])
             response = client.models.generate_content(
-                model="gemini-3.1-pro-preview",  # Advanced model for quality replies
+                model="gemini-3.1-pro-preview",
                 contents=prompt,
-                config={"max_output_tokens": 250},  # Allow longer, thoughtful replies
+                config={"max_output_tokens": 600},
             )
-            return response.text.strip()[:500]
+            reply = response.text.strip()
+            # Clean up any leading quotes or formatting artifacts
+            if reply.startswith('"') and reply.endswith('"'):
+                reply = reply[1:-1]
+            return reply[:1500]  # Allow full replies, not truncated
     except Exception as e:
         _mb_log("error", f"AI reply error: {e}")
     return None
