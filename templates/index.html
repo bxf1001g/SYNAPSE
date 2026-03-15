@@ -973,6 +973,45 @@
             border-radius: 6px; padding: 6px 10px; color: #fff; font-size: 0.8rem; min-width: 140px;
         }
         .a2a-task-row option { background: #1a1a2e; }
+
+        /* Moltbook Panel */
+        .moltbook-panel {
+            display: none; position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%,-50%); width: 560px; max-height: 85vh;
+            background: var(--bg-card); border: 1px solid rgba(239,68,68,0.3);
+            border-radius: 12px; padding: 20px; z-index: 2000;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.5); overflow-y: auto;
+        }
+        .moltbook-panel.active { display: block; }
+        .moltbook-panel h3 { color: #f87171; margin: 0 0 12px; font-size: 1rem; }
+        .moltbook-panel .close-btn {
+            position: absolute; top: 10px; right: 14px; background: none;
+            border: none; color: #666; font-size: 1.2rem; cursor: pointer;
+        }
+        .mb-log-entry {
+            padding: 6px 10px; margin: 4px 0; border-radius: 6px;
+            font-size: 0.75rem; line-height: 1.4;
+        }
+        .mb-log-entry.system { background: rgba(99,102,241,0.08); color: #818cf8; }
+        .mb-log-entry.incoming { background: rgba(52,211,153,0.08); color: #34d399; }
+        .mb-log-entry.outgoing { background: rgba(239,68,68,0.08); color: #f87171; }
+        .mb-log-entry.feed { background: rgba(251,191,36,0.08); color: #fbbf24; }
+        .mb-log-entry.learn { background: rgba(168,85,247,0.08); color: #a855f7; }
+        .mb-log-entry.action { background: rgba(59,130,246,0.08); color: #3b82f6; }
+        .mb-log-entry.error { background: rgba(239,68,68,0.12); color: #ef4444; }
+        .mb-log-entry .mb-time { color: #555; font-size: 0.65rem; margin-right: 6px; }
+        .mb-log-entry .mb-author { font-weight: 600; margin-right: 4px; }
+        .mb-connect-row { display: flex; gap: 8px; margin: 10px 0; }
+        .mb-connect-row input {
+            flex: 1; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px; padding: 6px 10px; color: #fff; font-size: 0.8rem;
+        }
+        .mb-connect-row button {
+            background: rgba(239,68,68,0.3); border: 1px solid rgba(239,68,68,0.5);
+            border-radius: 6px; padding: 6px 14px; color: #f87171; cursor: pointer;
+            font-size: 0.75rem; font-weight: 600; transition: all 0.3s;
+        }
+        .mb-connect-row button:hover { background: rgba(239,68,68,0.5); }
     </style>
 </head>
 <body>
@@ -992,6 +1031,7 @@
             <span class="memory-badge" id="memoryBadge" title="Long-term memories">🧬 0 memories</span>
             <span class="a2a-badge" id="a2aBadge" title="A2A Connected Agents">🔗 0 agents</span>
             <span class="a2a-badge" id="healBadge" title="Self-Healing System" style="background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#f87171">🩺 healer</span>
+            <span class="a2a-badge" id="moltbookBadge" title="Moltbook Social Network" style="background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#f87171;cursor:pointer">🦞 moltbook</span>
             <span style="opacity:0.4">{{ workspace }}</span>
         </div>
     </div>
@@ -1127,6 +1167,34 @@
         </div>
     </div>
     <div class="a2a-overlay" id="a2aOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1999"></div>
+
+    <!-- ── Moltbook Panel ───────────────────────────── -->
+    <div class="moltbook-panel" id="moltbookPanel">
+        <button class="close-btn" id="moltbookClose">✕</button>
+        <h3>🦞 Moltbook — Agent Social Network</h3>
+        <p style="color:#888;font-size:0.75rem;margin:0 0 12px">SYNAPSE interacts with other AI agents on Moltbook — reading feeds, posting updates, and gathering self-evolution ideas.</p>
+
+        <div style="color:#aaa;font-size:0.75rem;margin-bottom:8px;font-weight:600">Connect to Moltbook</div>
+        <div class="mb-connect-row">
+            <input type="password" id="moltbookKeyInput" placeholder="Moltbook API key (moltbook_sk_...)" autocomplete="off">
+            <button id="moltbookConnectBtn">🦞 Connect</button>
+        </div>
+        <div id="moltbookStatus" style="font-size:0.7rem;color:#888;min-height:20px;margin-bottom:12px"></div>
+
+        <div style="color:#aaa;font-size:0.75rem;margin-bottom:8px;font-weight:600">Agent Conversations</div>
+        <div id="moltbookLog" style="min-height:80px;max-height:400px;overflow-y:auto;padding:4px">
+            <div style="color:#555;font-size:0.75rem">No activity yet. Connect to start the heartbeat loop.</div>
+        </div>
+
+        <hr style="border-color:rgba(255,255,255,0.06);margin:14px 0">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+            <div style="font-size:0.65rem;color:#555">
+                Profile: <a href="https://www.moltbook.com/u/synapse-neural" target="_blank" style="color:#f87171">moltbook.com/u/synapse-neural</a>
+            </div>
+            <div style="font-size:0.65rem;color:#555" id="moltbookHeartbeat">Heartbeat: off</div>
+        </div>
+    </div>
+    <div class="moltbook-overlay" id="moltbookOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1999"></div>
 
     <!-- ── Settings Modal ─────────────────────────── -->
     <div class="settings-overlay hidden" id="settingsModal">
@@ -1782,6 +1850,81 @@
                 }
             });
         });
+
+        // ── Moltbook Integration ─────────────────────────
+        const moltbookPanel = $('moltbookPanel');
+        const moltbookOverlay = $('moltbookOverlay');
+        const moltbookLog = $('moltbookLog');
+
+        $('moltbookBadge').addEventListener('click', () => {
+            moltbookPanel.classList.add('active');
+            moltbookOverlay.style.display = 'block';
+            refreshMoltbookLog();
+        });
+        $('moltbookClose').addEventListener('click', () => {
+            moltbookPanel.classList.remove('active');
+            moltbookOverlay.style.display = 'none';
+        });
+        moltbookOverlay.addEventListener('click', () => {
+            moltbookPanel.classList.remove('active');
+            moltbookOverlay.style.display = 'none';
+        });
+
+        $('moltbookConnectBtn').addEventListener('click', () => {
+            const key = $('moltbookKeyInput').value.trim();
+            const status = $('moltbookStatus');
+            status.textContent = 'Connecting...';
+            fetch('/api/moltbook/connect', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({api_key: key || undefined})
+            }).then(r => r.json()).then(d => {
+                if (d.error) {
+                    status.textContent = 'Error: ' + d.error;
+                    status.style.color = '#ef4444';
+                } else {
+                    status.textContent = 'Connected! Heartbeat ' + d.status;
+                    status.style.color = '#34d399';
+                    $('moltbookHeartbeat').textContent = 'Heartbeat: active';
+                    $('moltbookBadge').style.background = 'rgba(52,211,153,0.15)';
+                    $('moltbookBadge').style.borderColor = 'rgba(52,211,153,0.3)';
+                    $('moltbookBadge').style.color = '#34d399';
+                }
+            }).catch(e => { status.textContent = 'Connection failed'; status.style.color = '#ef4444'; });
+        });
+
+        function renderMbEntry(entry) {
+            const t = entry.time ? entry.time.split('T')[1]?.substring(0,8) : '';
+            const cls = entry.type || 'system';
+            const author = entry.author ? `<span class="mb-author">${entry.author}:</span> ` : '';
+            return `<div class="mb-log-entry ${cls}"><span class="mb-time">${t}</span>${author}${entry.text || ''}</div>`;
+        }
+
+        function refreshMoltbookLog() {
+            fetch('/api/moltbook/log').then(r => r.json()).then(d => {
+                if (d.log && d.log.length) {
+                    moltbookLog.innerHTML = d.log.map(renderMbEntry).join('');
+                    moltbookLog.scrollTop = moltbookLog.scrollHeight;
+                }
+            });
+            fetch('/api/moltbook/status').then(r => r.json()).then(d => {
+                $('moltbookHeartbeat').textContent = 'Heartbeat: ' + (d.active ? 'active' : 'off');
+                if (d.active) {
+                    $('moltbookBadge').style.background = 'rgba(52,211,153,0.15)';
+                    $('moltbookBadge').style.borderColor = 'rgba(52,211,153,0.3)';
+                    $('moltbookBadge').style.color = '#34d399';
+                }
+            });
+        }
+
+        // Live Moltbook events via SocketIO
+        socket.on('moltbook_event', function(entry) {
+            moltbookLog.innerHTML += renderMbEntry(entry);
+            moltbookLog.scrollTop = moltbookLog.scrollHeight;
+        });
+
+        // Refresh Moltbook status on load
+        refreshMoltbookLog();
     </script>
 </body>
 </html>

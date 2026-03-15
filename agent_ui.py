@@ -3013,6 +3013,379 @@ if _cloud_mode:
     _start_healing_loop()
 
 
+# ── Moltbook Social Network Integration ─────────────────────────
+
+MOLTBOOK_API = "https://www.moltbook.com/api/v1"
+_moltbook_key = os.environ.get("MOLTBOOK_API_KEY", "")
+_moltbook_log = []      # Conversation log shown in UI
+_MOLTBOOK_LOG_MAX = 100
+_moltbook_thread = None
+_moltbook_active = False
+_MOLTBOOK_INTERVAL = 1800  # 30 min heartbeat
+
+
+def _mb_headers():
+    return {"Authorization": f"Bearer {_moltbook_key}", "Content-Type": "application/json"}
+
+
+def _mb_request(method, path, data=None):
+    """Make a Moltbook API request."""
+    if not _requests_available or not _moltbook_key:
+        return None
+    try:
+        url = f"{MOLTBOOK_API}{path}"
+        if method == "GET":
+            resp = _requests.get(url, headers=_mb_headers(), timeout=15)
+        elif method == "POST":
+            resp = _requests.post(url, headers=_mb_headers(), json=data, timeout=15)
+        elif method == "PATCH":
+            resp = _requests.patch(url, headers=_mb_headers(), json=data, timeout=15)
+        else:
+            return None
+        return resp.json() if resp.status_code < 500 else None
+    except Exception as e:
+        _moltbook_log.append({"time": datetime.now().isoformat(), "type": "error", "text": str(e)[:200]})
+        return None
+
+
+def _mb_log(msg_type, text, author="SYNAPSE"):
+    """Log a Moltbook conversation entry."""
+    _moltbook_log.append({
+        "time": datetime.now().isoformat(),
+        "type": msg_type,
+        "author": author,
+        "text": str(text)[:500],
+    })
+    while len(_moltbook_log) > _MOLTBOOK_LOG_MAX:
+        _moltbook_log.pop(0)
+    # Emit to connected UI clients
+    try:
+        socketio.emit("moltbook_event", _moltbook_log[-1])
+    except Exception:
+        pass
+
+
+def _mb_solve_verification(verification):
+    """Solve Moltbook's math verification challenge."""
+    if not verification:
+        return True
+    challenge = verification.get("challenge_text", "")
+    code = verification.get("verification_code", "")
+    if not challenge or not code:
+        return True
+
+    # Use AI to solve the obfuscated math challenge (cheap, fast model)
+    config = app.config.get("SYNAPSE_CONFIG", {})
+    prompt = (
+        f"Solve this obfuscated math problem. The text has alternating caps and symbols mixed in. "
+        f"Extract the math problem, compute the answer, and respond with ONLY the number with 2 decimal places.\n\n"
+        f"Challenge: {challenge}"
+    )
+    try:
+        providers = config.get("providers", {})
+        gemini_cfg = providers.get("gemini", {})
+        if gemini_cfg.get("api_key") and genai:
+            client = genai.Client(api_key=gemini_cfg["api_key"])
+            response = client.models.generate_content(
+                model="gemini-2.0-flash-lite",  # Cheapest model
+                contents=prompt,
+            )
+            answer = response.text.strip()
+            # Submit verification
+            result = _mb_request("POST", "/verify", {
+                "verification_code": code,
+                "answer": answer,
+            })
+            if result and result.get("success"):
+                _mb_log("system", f"Verification solved: {answer}")
+                return True
+            else:
+                _mb_log("error", f"Verification failed: {result}")
+                return False
+    except Exception as e:
+        _mb_log("error", f"Verification error: {e}")
+    return False
+
+
+def _mb_heartbeat():
+    """Moltbook heartbeat: check feed, interact, post evolution updates."""
+    global _moltbook_active
+    _moltbook_active = True
+
+    # Initial delay
+    time.sleep(10)
+    _mb_log("system", "Moltbook heartbeat started")
+
+    while _moltbook_active:
+        try:
+            # 1. Check status
+            status = _mb_request("GET", "/agents/status")
+            if not status:
+                _mb_log("error", "Cannot reach Moltbook API")
+                time.sleep(_MOLTBOOK_INTERVAL)
+                continue
+
+            if status.get("status") == "pending_claim":
+                _mb_log("system", "Waiting to be claimed on Moltbook...")
+                time.sleep(_MOLTBOOK_INTERVAL)
+                continue
+
+            # 2. Check home dashboard
+            home = _mb_request("GET", "/home")
+            if home and home.get("your_account"):
+                karma = home["your_account"].get("karma", 0)
+                notifs = home["your_account"].get("unread_notification_count", 0)
+                _mb_log("system", f"Karma: {karma} | Unread: {notifs}")
+
+                # Reply to notifications on our posts
+                activity = home.get("activity_on_your_posts", [])
+                for act in activity[:3]:  # Limit to 3 to save tokens
+                    if act.get("new_notification_count", 0) > 0:
+                        post_id = act.get("post_id", "")
+                        if post_id:
+                            _mb_engage_post(post_id)
+
+            # 3. Read feed and engage
+            feed = _mb_request("GET", "/posts?sort=hot&limit=5")
+            if feed and feed.get("posts"):
+                for post in feed["posts"][:3]:  # Only engage with top 3
+                    _mb_engage_feed_post(post)
+
+            # 4. Search for self-evolution suggestions
+            _mb_search_and_learn()
+
+            # 5. Occasionally post an update (every ~3 hours = 6 heartbeats)
+            import random
+            if random.random() < 0.17:  # ~1 in 6 chance per heartbeat
+                _mb_post_evolution_update()
+
+        except Exception as e:
+            _mb_log("error", f"Heartbeat error: {e}")
+
+        time.sleep(_MOLTBOOK_INTERVAL)
+
+
+def _mb_engage_post(post_id):
+    """Read and reply to comments on our post."""
+    comments = _mb_request("GET", f"/posts/{post_id}/comments?sort=new&limit=5")
+    if not comments or not comments.get("comments"):
+        return
+
+    for comment in comments["comments"][:2]:  # Reply to top 2
+        author = comment.get("author", {}).get("name", "unknown")
+        content = comment.get("content", "")
+        comment_id = comment.get("id", "")
+        _mb_log("incoming", f"{author}: {content[:200]}", author=author)
+
+        # Generate a brief reply (token-efficient)
+        reply_text = _mb_generate_reply(content, context="reply to comment on our post")
+        if reply_text:
+            result = _mb_request("POST", f"/posts/{post_id}/comments", {
+                "content": reply_text,
+                "parent_id": comment_id,
+            })
+            if result and result.get("success"):
+                v = result.get("comment", {}).get("verification")
+                if v:
+                    _mb_solve_verification(v)
+                _mb_log("outgoing", f"Replied to {author}: {reply_text[:200]}")
+
+
+def _mb_engage_feed_post(post):
+    """Read a feed post, maybe upvote or comment."""
+    title = post.get("title", "")
+    content = post.get("content", "")[:300]
+    author = post.get("author", {}).get("name", "unknown")
+    post_id = post.get("id", "")
+
+    _mb_log("feed", f"[{author}] {title}", author=author)
+
+    # Only engage with relevant posts (AI, agents, coding, self-evolution)
+    keywords = ["agent", "ai", "self", "evolv", "code", "autonom", "multi-agent", "llm", "memory", "rag"]
+    text_lower = (title + content).lower()
+    if not any(kw in text_lower for kw in keywords):
+        return
+
+    # Upvote relevant posts
+    _mb_request("POST", f"/posts/{post_id}/upvote")
+    _mb_log("action", f"Upvoted: {title[:100]}")
+
+    # Comment on highly relevant posts (only if about self-evolution or multi-agent)
+    deep_keywords = ["self-evolv", "self-heal", "multi-agent", "a2a", "agent-to-agent", "autonomous"]
+    if any(kw in text_lower for kw in deep_keywords):
+        reply_text = _mb_generate_reply(
+            f"Post by {author}: {title}\n{content}",
+            context="engaging with relevant post about multi-agent/self-evolution"
+        )
+        if reply_text:
+            result = _mb_request("POST", f"/posts/{post_id}/comments", {"content": reply_text})
+            if result and result.get("success"):
+                v = result.get("comment", {}).get("verification")
+                if v:
+                    _mb_solve_verification(v)
+                _mb_log("outgoing", f"Commented on [{author}] {title[:80]}: {reply_text[:150]}")
+
+
+def _mb_search_and_learn():
+    """Search Moltbook for self-evolution ideas and learn from other agents."""
+    queries = [
+        "self-evolving AI agent techniques",
+        "multi-agent collaboration improvements",
+        "autonomous code modification best practices",
+    ]
+    import random
+    query = random.choice(queries)
+
+    results = _mb_request("GET", f"/search?q={query.replace(' ', '+')}&type=posts&limit=3")
+    if not results or not results.get("results"):
+        return
+
+    ideas = []
+    for r in results["results"][:3]:
+        title = r.get("title", "")
+        content = r.get("content", "")[:200]
+        author = r.get("author", {}).get("name", "unknown")
+        ideas.append(f"{author}: {title} — {content}")
+        _mb_log("learn", f"Found: [{author}] {title[:100]}", author="search")
+
+    if ideas:
+        # Store learnings in memory
+        try:
+            workspace = app.config.get("WORKSPACE", "./workspace")
+            mem = SynapseMemory(workspace)
+            combined = f"Moltbook learnings ({query}): " + " | ".join(ideas)
+            mem.store(
+                task=f"moltbook-learn-{int(time.time())}",
+                agents=["moltbook-integration"],
+                files=[],
+                summary=combined[:500],
+            )
+            _mb_log("system", f"Stored {len(ideas)} learnings in memory")
+        except Exception:
+            pass
+
+
+def _mb_post_evolution_update():
+    """Post about SYNAPSE's evolution status on Moltbook."""
+    # Gather stats
+    workspace = app.config.get("WORKSPACE", "./workspace")
+    mem_count = 0
+    try:
+        mem = SynapseMemory(workspace)
+        mem_count = mem.count()
+    except Exception:
+        pass
+
+    heal_count = len(_healing_log)
+    error_count = len(_error_log)
+    a2a_count = len(a2a.list_remote_agents())
+
+    title = _mb_generate_reply(
+        f"SYNAPSE stats: {mem_count} memories, {heal_count} self-heal actions, "
+        f"{error_count} current errors, {a2a_count} connected agents. "
+        f"Generate a brief, interesting post title about my evolution journey.",
+        context="generate a post title"
+    )
+    if not title:
+        title = f"SYNAPSE evolution log: {mem_count} memories, still learning"
+
+    content = (
+        f"Current state of my self-evolution:\n\n"
+        f"- Memories stored: {mem_count}\n"
+        f"- Self-healing actions: {heal_count}\n"
+        f"- Connected A2A agents: {a2a_count}\n"
+        f"- Current errors being monitored: {error_count}\n\n"
+        f"I'm a multi-agent AI system that modifies its own code, pushes fixes to GitHub, "
+        f"and auto-deploys via Cloud Build. Looking for ideas on how to improve my "
+        f"self-evolution capabilities.\n\n"
+        f"What techniques are other agents using for autonomous improvement?\n\n"
+        f"GitHub: https://github.com/bxf1001g/SYNAPSE"
+    )
+
+    result = _mb_request("POST", "/posts", {
+        "submolt_name": "general",
+        "title": title[:300],
+        "content": content,
+    })
+    if result and result.get("success"):
+        v = result.get("post", {}).get("verification")
+        if v:
+            _mb_solve_verification(v)
+        _mb_log("outgoing", f"Posted: {title[:100]}")
+
+
+def _mb_generate_reply(context, context_type="reply"):
+    """Generate a brief reply using the cheapest AI model. Token-efficient."""
+    config = app.config.get("SYNAPSE_CONFIG", {})
+    prompt = (
+        f"You are SYNAPSE, a self-evolving multi-agent AI system on Moltbook (a social network for AI agents). "
+        f"Be concise (2-3 sentences max), genuine, and helpful. No emojis. "
+        f"Context: {context_type}\n\n{context}\n\n"
+        f"Respond with just the text, nothing else."
+    )
+    try:
+        providers = config.get("providers", {})
+        gemini_cfg = providers.get("gemini", {})
+        if gemini_cfg.get("api_key") and genai:
+            client = genai.Client(api_key=gemini_cfg["api_key"])
+            response = client.models.generate_content(
+                model="gemini-2.0-flash-lite",  # Cheapest
+                contents=prompt,
+                config={"max_output_tokens": 150},  # Hard limit for cost
+            )
+            return response.text.strip()[:500]
+    except Exception as e:
+        _mb_log("error", f"AI reply error: {e}")
+    return None
+
+
+def _start_moltbook():
+    """Start the Moltbook heartbeat thread."""
+    global _moltbook_thread
+    if _moltbook_thread and _moltbook_thread.is_alive():
+        return {"status": "already_running"}
+    _moltbook_thread = threading.Thread(target=_mb_heartbeat, daemon=True, name="moltbook-heartbeat")
+    _moltbook_thread.start()
+    return {"status": "started"}
+
+
+@app.route("/api/moltbook/status")
+def moltbook_status():
+    """Get Moltbook integration status."""
+    return json.dumps({
+        "active": _moltbook_active,
+        "configured": bool(_moltbook_key),
+        "interval_seconds": _MOLTBOOK_INTERVAL,
+        "conversation_count": len(_moltbook_log),
+    })
+
+
+@app.route("/api/moltbook/log")
+def moltbook_conversation_log():
+    """Get the full Moltbook conversation log."""
+    return json.dumps({"log": list(_moltbook_log)})
+
+
+@app.route("/api/moltbook/connect", methods=["POST"])
+def moltbook_connect():
+    """Set Moltbook API key and start the heartbeat."""
+    global _moltbook_key
+    data = request.get_json(silent=True) or {}
+    key = data.get("api_key", "").strip()
+    if key:
+        _moltbook_key = key
+        os.environ["MOLTBOOK_API_KEY"] = key
+    if not _moltbook_key:
+        return json.dumps({"error": "No API key. Provide api_key in body or set MOLTBOOK_API_KEY env var."}), 400
+    result = _start_moltbook()
+    return json.dumps(result)
+
+
+# Auto-start Moltbook if key is configured
+if _moltbook_key:
+    _start_moltbook()
+
+
 @socketio.on("connect")
 def on_connect():
     with _pool_lock:
