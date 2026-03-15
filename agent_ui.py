@@ -2993,6 +2993,14 @@ def _tg_poll_loop():
                 f"https://api.telegram.org/bot{_TG_TOKEN}/getUpdates",
                 params=params, timeout=10
             )
+            if resp.status_code == 409:
+                # Another instance is polling; back off and retry
+                import random
+                backoff = random.uniform(3, 10)
+                print(f"[TG] 409 conflict, backing off {backoff:.0f}s",
+                      flush=True)
+                time.sleep(backoff)
+                continue
             if resp.status_code != 200:
                 print(
                     f"[TG] getUpdates HTTP {resp.status_code}", flush=True
