@@ -41,6 +41,8 @@ options:
 substitutions:
   _SERVICE_NAME: synapse
   _REGION: us-central1
+  _GEMINI_API_KEY: ''
+  _GITHUB_TOKEN: ''
   _MOLTBOOK_API_KEY: ''
   _TELEGRAM_BOT_TOKEN: ''
   _TELEGRAM_CHAT_ID: ''
