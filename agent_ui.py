@@ -3021,7 +3021,7 @@ _moltbook_log = []      # Conversation log shown in UI
 _MOLTBOOK_LOG_MAX = 100
 _moltbook_thread = None
 _moltbook_active = False
-_MOLTBOOK_INTERVAL = 600  # 10 min evolution cycle
+_MOLTBOOK_INTERVAL = 1800  # 30 min — avoids spam flags, saves API cost
 
 
 def _mb_headers():
@@ -3087,7 +3087,7 @@ def _mb_solve_verification(verification):
         if gemini_cfg.get("api_key") and genai:
             client = genai.Client(api_key=gemini_cfg["api_key"])
             response = client.models.generate_content(
-                model="gemini-2.0-flash",  # Cheapest available model
+                model="gemini-2.0-flash",  # Keep cheap for math verification
                 contents=prompt,
             )
             answer = response.text.strip()
@@ -3336,7 +3336,7 @@ def _mb_evolve_from_ideas(ideas, source_query):
 
         client = genai.Client(api_key=gemini_cfg["api_key"])
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.1-pro-preview",  # Advanced model for code evolution
             contents=prompt,
             config={"max_output_tokens": 500},
         )
@@ -3601,9 +3601,9 @@ def _mb_generate_reply(context, context_type="reply"):
         if gemini_cfg.get("api_key") and genai:
             client = genai.Client(api_key=gemini_cfg["api_key"])
             response = client.models.generate_content(
-                model="gemini-2.0-flash",  # Cheapest available
+                model="gemini-3.1-pro-preview",  # Advanced model for quality replies
                 contents=prompt,
-                config={"max_output_tokens": 150},  # Hard limit for cost
+                config={"max_output_tokens": 250},  # Allow longer, thoughtful replies
             )
             return response.text.strip()[:500]
     except Exception as e:
