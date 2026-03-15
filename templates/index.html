@@ -1032,6 +1032,7 @@
             <span class="a2a-badge" id="a2aBadge" title="A2A Connected Agents">🔗 0 agents</span>
             <span class="a2a-badge" id="healBadge" title="Self-Healing System" style="background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#f87171">🩺 healer</span>
             <span class="a2a-badge" id="moltbookBadge" title="Moltbook Social Network" style="background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#f87171;cursor:pointer">🦞 moltbook</span>
+            <span class="a2a-badge" id="consciousnessBadge" title="Consciousness System — Dreams, Memory Decay, Metacognition" style="background:rgba(168,85,247,0.15);border-color:rgba(168,85,247,0.3);color:#c084fc;cursor:pointer">💭 consciousness</span>
             <span style="opacity:0.4">{{ workspace }}</span>
         </div>
     </div>
@@ -1195,6 +1196,66 @@
         </div>
     </div>
     <div class="moltbook-overlay" id="moltbookOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1999"></div>
+
+    <!-- ── Consciousness Panel ──────────────────────── -->
+    <div class="moltbook-panel" id="consciousnessPanel" style="display:none">
+        <button class="close-btn" id="consciousnessClose">✕</button>
+        <h3>💭 Consciousness — Dreaming, Forgetting & Metacognition</h3>
+        <p style="color:#888;font-size:0.75rem;margin:0 0 12px">SYNAPSE's subconscious mind — memory consolidation during dream cycles, weight decay for forgetting, and self-grading for metacognition.</p>
+
+        <!-- Identity Section -->
+        <div style="color:#c084fc;font-size:0.75rem;margin-bottom:6px;font-weight:600">🪞 Identity & Personality</div>
+        <div id="consciousnessIdentity" style="font-size:0.7rem;color:#aaa;margin-bottom:12px;padding:8px;background:rgba(168,85,247,0.08);border-radius:8px;border:1px solid rgba(168,85,247,0.15)">
+            Loading...
+        </div>
+
+        <!-- Stats Row -->
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+            <div style="flex:1;padding:8px;background:rgba(59,130,246,0.08);border-radius:8px;border:1px solid rgba(59,130,246,0.15);text-align:center">
+                <div style="font-size:1.1rem;font-weight:700;color:#60a5fa" id="cDreamCount">0</div>
+                <div style="font-size:0.6rem;color:#888">Dreams</div>
+            </div>
+            <div style="flex:1;padding:8px;background:rgba(34,197,94,0.08);border-radius:8px;border:1px solid rgba(34,197,94,0.15);text-align:center">
+                <div style="font-size:1.1rem;font-weight:700;color:#4ade80" id="cInsightCount">0</div>
+                <div style="font-size:0.6rem;color:#888">Insights</div>
+            </div>
+            <div style="flex:1;padding:8px;background:rgba(251,191,36,0.08);border-radius:8px;border:1px solid rgba(251,191,36,0.15);text-align:center">
+                <div style="font-size:1.1rem;font-weight:700;color:#fbbf24" id="cGradeAvg">—</div>
+                <div style="font-size:0.6rem;color:#888">Avg Grade</div>
+            </div>
+            <div style="flex:1;padding:8px;background:rgba(239,68,68,0.08);border-radius:8px;border:1px solid rgba(239,68,68,0.15);text-align:center">
+                <div style="font-size:1.1rem;font-weight:700;color:#f87171" id="cMemoryCount">0</div>
+                <div style="font-size:0.6rem;color:#888">Memories</div>
+            </div>
+        </div>
+
+        <!-- Trigger Dream -->
+        <div style="margin-bottom:12px">
+            <button id="triggerDreamBtn" style="padding:6px 14px;background:rgba(168,85,247,0.2);border:1px solid rgba(168,85,247,0.4);border-radius:6px;color:#c084fc;cursor:pointer;font-size:0.75rem">💤 Trigger Dream Cycle</button>
+            <span id="dreamStatus" style="font-size:0.65rem;color:#888;margin-left:8px"></span>
+        </div>
+
+        <!-- Recent Grades -->
+        <div style="color:#fbbf24;font-size:0.75rem;margin-bottom:6px;font-weight:600">📊 Recent Self-Grades</div>
+        <div id="consciousnessGrades" style="min-height:40px;max-height:150px;overflow-y:auto;padding:4px;margin-bottom:12px;font-size:0.7rem;color:#aaa">
+            No grades yet — complete a task to see self-evaluation.
+        </div>
+
+        <!-- Consciousness Event Log -->
+        <div style="color:#60a5fa;font-size:0.75rem;margin-bottom:6px;font-weight:600">🔬 Consciousness Event Log (Research)</div>
+        <div id="consciousnessLog" style="min-height:80px;max-height:300px;overflow-y:auto;padding:4px">
+            <div style="color:#555;font-size:0.7rem">Waiting for consciousness events...</div>
+        </div>
+
+        <hr style="border-color:rgba(255,255,255,0.06);margin:14px 0">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+            <div style="font-size:0.65rem;color:#555">
+                Dream interval: <span id="cDreamInterval">6h</span> · Decay rate: <span id="cDecayRate">5%</span>/cycle
+            </div>
+            <div style="font-size:0.65rem;color:#555" id="cLastDream">Last dream: never</div>
+        </div>
+    </div>
+    <div class="moltbook-overlay" id="consciousnessOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1999"></div>
 
     <!-- ── Settings Modal ─────────────────────────── -->
     <div class="settings-overlay hidden" id="settingsModal">
@@ -1925,6 +1986,125 @@
 
         // Refresh Moltbook status on load
         refreshMoltbookLog();
+
+        // ── Consciousness Panel JS ──────────────────────
+        const consciousnessPanel = $('consciousnessPanel');
+        const consciousnessOverlay = $('consciousnessOverlay');
+        const consciousnessLog = $('consciousnessLog');
+
+        $('consciousnessBadge').addEventListener('click', () => {
+            consciousnessPanel.style.display = 'block';
+            consciousnessPanel.classList.add('active');
+            consciousnessOverlay.style.display = 'block';
+            refreshConsciousness();
+        });
+        $('consciousnessClose').addEventListener('click', () => {
+            consciousnessPanel.classList.remove('active');
+            consciousnessOverlay.style.display = 'none';
+            setTimeout(() => consciousnessPanel.style.display = 'none', 300);
+        });
+        consciousnessOverlay.addEventListener('click', () => {
+            consciousnessPanel.classList.remove('active');
+            consciousnessOverlay.style.display = 'none';
+            setTimeout(() => consciousnessPanel.style.display = 'none', 300);
+        });
+
+        $('triggerDreamBtn').addEventListener('click', () => {
+            $('dreamStatus').textContent = 'Triggering dream...';
+            fetch('/api/consciousness/trigger-dream', {method:'POST'}).then(r => r.json()).then(d => {
+                $('dreamStatus').textContent = d.status === 'dream_triggered' ? '💤 Dream started...' : 'Error';
+                $('dreamStatus').style.color = '#c084fc';
+            }).catch(() => { $('dreamStatus').textContent = 'Failed'; });
+        });
+
+        function refreshConsciousness() {
+            fetch('/api/consciousness').then(r => r.json()).then(d => {
+                // Update stats
+                $('cDreamCount').textContent = d.dream_count || 0;
+                $('cInsightCount').textContent = d.identity?.dream_insights_total || 0;
+                $('cGradeAvg').textContent = d.avg_grade ? (d.avg_grade + '/10') : '—';
+                $('cMemoryCount').textContent = d.memory_stats?.total || 0;
+                $('cLastDream').textContent = 'Last dream: ' + (d.identity?.last_dream ? new Date(d.identity.last_dream).toLocaleTimeString() : 'never');
+
+                // Render identity
+                const id = d.identity || {};
+                const traits = id.personality_traits || {};
+                let traitHtml = Object.entries(traits).map(([k,v]) => {
+                    const pct = Math.round(v * 100);
+                    const color = pct > 70 ? '#4ade80' : pct > 40 ? '#fbbf24' : '#f87171';
+                    return `<div style="display:flex;align-items:center;gap:6px;margin:2px 0">
+                        <span style="width:70px;color:#888">${k}</span>
+                        <div style="flex:1;height:6px;background:rgba(255,255,255,0.05);border-radius:3px">
+                            <div style="width:${pct}%;height:100%;background:${color};border-radius:3px;transition:width 0.5s"></div>
+                        </div>
+                        <span style="width:30px;text-align:right;color:${color}">${pct}%</span>
+                    </div>`;
+                }).join('');
+                const strengths = (id.strengths || []).map(s => `<span style="color:#4ade80;margin-right:4px">✓ ${s}</span>`).join('');
+                const weaknesses = (id.weaknesses || []).map(w => `<span style="color:#f87171;margin-right:4px">⚠ ${w}</span>`).join('');
+                $('consciousnessIdentity').innerHTML = traitHtml +
+                    (strengths ? `<div style="margin-top:6px">${strengths}</div>` : '') +
+                    (weaknesses ? `<div style="margin-top:4px">${weaknesses}</div>` : '');
+
+                // Render event log
+                if (d.recent_events && d.recent_events.length) {
+                    consciousnessLog.innerHTML = d.recent_events.map(renderConsciousnessEvent).join('');
+                    consciousnessLog.scrollTop = consciousnessLog.scrollHeight;
+                }
+
+                // Update badge color
+                $('consciousnessBadge').style.background = d.dream_active ? 'rgba(168,85,247,0.25)' : 'rgba(168,85,247,0.15)';
+            }).catch(() => {});
+
+            // Fetch grades
+            fetch('/api/consciousness/grades').then(r => r.json()).then(d => {
+                const grades = d.grades || [];
+                if (grades.length) {
+                    $('consciousnessGrades').innerHTML = grades.slice(-5).reverse().map(g => {
+                        const stars = '★'.repeat(Math.round(g.grades?.overall || 5)) + '☆'.repeat(10 - Math.round(g.grades?.overall || 5));
+                        return `<div style="padding:4px 6px;margin:2px 0;background:rgba(251,191,36,0.05);border-radius:4px;border-left:2px solid rgba(251,191,36,0.3)">
+                            <div style="color:#fbbf24">${stars} <span style="color:#888">${g.grades?.overall || '?'}/10</span></div>
+                            <div style="color:#aaa;font-size:0.65rem">${g.task?.substring(0,80) || 'unknown task'}...</div>
+                            <div style="color:#888;font-size:0.6rem;font-style:italic">${g.reflection || ''}</div>
+                            ${g.improvement ? `<div style="color:#60a5fa;font-size:0.6rem">💡 ${g.improvement}</div>` : ''}
+                        </div>`;
+                    }).join('');
+                }
+            }).catch(() => {});
+        }
+
+        function renderConsciousnessEvent(e) {
+            const t = e.time ? e.time.split('T')[1]?.substring(0,8) : '';
+            const colors = {
+                dream_start: '#c084fc', dream_complete: '#4ade80', dream_rem_start: '#818cf8',
+                dream_deep_start: '#60a5fa', dream_consolidate_start: '#fbbf24',
+                dream_connection: '#34d399', dream_meta_pattern: '#f472b6',
+                personality_shift: '#fb923c', metacognition_grade: '#fbbf24',
+                dream_error: '#ef4444', dream_skip: '#888',
+            };
+            const color = colors[e.type] || '#aaa';
+            return `<div style="font-size:0.68rem;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.03)">
+                <span style="color:#555">${t}</span>
+                <span style="color:${color};margin-left:4px">${e.message || ''}</span>
+            </div>`;
+        }
+
+        // Live consciousness events via SocketIO
+        socket.on('consciousness_event', function(entry) {
+            consciousnessLog.innerHTML += renderConsciousnessEvent(entry);
+            consciousnessLog.scrollTop = consciousnessLog.scrollHeight;
+            // Update badge glow
+            $('consciousnessBadge').style.boxShadow = '0 0 8px rgba(168,85,247,0.5)';
+            setTimeout(() => $('consciousnessBadge').style.boxShadow = 'none', 2000);
+        });
+
+        // Initial consciousness check
+        fetch('/api/consciousness').then(r => r.json()).then(d => {
+            if (d.dream_active) {
+                $('consciousnessBadge').style.background = 'rgba(168,85,247,0.25)';
+                $('consciousnessBadge').textContent = '💭 dreaming';
+            }
+        }).catch(() => {});
     </script>
 </body>
 </html>

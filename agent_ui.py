@@ -470,8 +470,9 @@ class SynapseMemory:
         except Exception:
             return None
 
-    def store(self, task, summary, agent_roles, files_created, tags=None):
-        """Store a completed task into long-term memory."""
+    def store(self, task, summary, agent_roles, files_created, tags=None,
+              memory_type="task", emotional_intensity=0.5):
+        """Store a completed task into long-term memory with consciousness metadata."""
         col = self._get_collection()
         if col is None:
             return
@@ -486,6 +487,11 @@ class SynapseMemory:
             "timestamp": datetime.now().isoformat(),
             "agent_roles": ",".join(agent_roles),
             "file_count": str(len(files_created)),
+            "weight": "1.0",
+            "memory_type": memory_type,
+            "access_count": "0",
+            "emotional_intensity": str(emotional_intensity),
+            "last_accessed": datetime.now().isoformat(),
         }
         if tags:
             metadata["tags"] = ",".join(tags)
@@ -494,17 +500,53 @@ class SynapseMemory:
         except Exception:
             pass
 
+    def store_insight(self, insight_text, source="dream", intensity=0.7):
+        """Store a dream insight or metacognition observation."""
+        col = self._get_collection()
+        if col is None:
+            return
+        doc_id = f"{source}-{int(time.time() * 1000)}"
+        metadata = {
+            "timestamp": datetime.now().isoformat(),
+            "weight": "1.0",
+            "memory_type": source,
+            "access_count": "0",
+            "emotional_intensity": str(intensity),
+            "last_accessed": datetime.now().isoformat(),
+            "agent_roles": "consciousness",
+            "file_count": "0",
+        }
+        try:
+            col.add(ids=[doc_id], documents=[insight_text], metadatas=[metadata])
+        except Exception:
+            pass
+
     def recall(self, query, n=5):
-        """Recall relevant memories via semantic search."""
+        """Recall relevant memories via semantic search — boosts access weight."""
         col = self._get_collection()
         if col is None:
             return []
         try:
             results = col.query(query_texts=[query], n_results=n)
             memories = []
+            ids_to_boost = []
             for i, doc in enumerate(results.get("documents", [[]])[0]):
                 meta = results.get("metadatas", [[]])[0][i] if results.get("metadatas") else {}
-                memories.append({"text": doc, "metadata": meta})
+                doc_id = results.get("ids", [[]])[0][i] if results.get("ids") else None
+                memories.append({"text": doc, "metadata": meta, "id": doc_id})
+                if doc_id:
+                    ids_to_boost.append((doc_id, meta))
+            # Boost weight on access (memory strengthening)
+            for doc_id, meta in ids_to_boost:
+                try:
+                    ac = int(float(meta.get("access_count", "0"))) + 1
+                    w = min(float(meta.get("weight", "1.0")) * 1.05, 2.0)  # Cap at 2x
+                    col.update(ids=[doc_id], metadatas=[{
+                        **meta, "access_count": str(ac),
+                        "weight": f"{w:.3f}", "last_accessed": datetime.now().isoformat()
+                    }])
+                except Exception:
+                    pass
             return memories
         except Exception:
             return []
@@ -512,6 +554,92 @@ class SynapseMemory:
     def count(self):
         col = self._get_collection()
         return col.count() if col else 0
+
+    def random_memories(self, n=4):
+        """Pull N random memories for dream cycle — simulates random neural firing."""
+        col = self._get_collection()
+        if col is None:
+            return []
+        try:
+            total = col.count()
+            if total < 2:
+                return []
+            all_data = col.get(limit=min(total, 200), include=["documents", "metadatas"])
+            docs = all_data.get("documents", [])
+            metas = all_data.get("metadatas", [])
+            ids = all_data.get("ids", [])
+            if len(docs) < 2:
+                return []
+            import random
+            indices = random.sample(range(len(docs)), min(n, len(docs)))
+            return [{"id": ids[i], "text": docs[i], "metadata": metas[i]} for i in indices]
+        except Exception:
+            return []
+
+    def decay_all(self, decay_rate=0.95):
+        """Apply exponential decay to all memory weights — forgetting curve."""
+        col = self._get_collection()
+        if col is None:
+            return {"decayed": 0, "pruned": 0}
+        try:
+            total = col.count()
+            if total == 0:
+                return {"decayed": 0, "pruned": 0}
+            all_data = col.get(limit=min(total, 500), include=["metadatas"])
+            ids = all_data.get("ids", [])
+            metas = all_data.get("metadatas", [])
+            decayed = 0
+            pruned_ids = []
+            for i, meta in enumerate(metas):
+                w = float(meta.get("weight", "1.0"))
+                ei = float(meta.get("emotional_intensity", "0.5"))
+                # High emotional intensity decays slower (memorable events persist)
+                adjusted_rate = decay_rate + (1 - decay_rate) * ei * 0.5
+                new_w = w * adjusted_rate
+                if new_w < 0.1:  # Prune threshold
+                    pruned_ids.append(ids[i])
+                else:
+                    meta["weight"] = f"{new_w:.3f}"
+                    try:
+                        col.update(ids=[ids[i]], metadatas=[meta])
+                        decayed += 1
+                    except Exception:
+                        pass
+            # Prune memories below threshold
+            if pruned_ids:
+                try:
+                    col.delete(ids=pruned_ids)
+                except Exception:
+                    pass
+            return {"decayed": decayed, "pruned": len(pruned_ids)}
+        except Exception:
+            return {"decayed": 0, "pruned": 0}
+
+    def get_weight_stats(self):
+        """Get memory weight distribution for research observation."""
+        col = self._get_collection()
+        if col is None:
+            return {}
+        try:
+            total = col.count()
+            if total == 0:
+                return {"total": 0}
+            all_data = col.get(limit=min(total, 500), include=["metadatas"])
+            metas = all_data.get("metadatas", [])
+            weights = [float(m.get("weight", "1.0")) for m in metas]
+            types = {}
+            for m in metas:
+                t = m.get("memory_type", "unknown")
+                types[t] = types.get(t, 0) + 1
+            return {
+                "total": total,
+                "avg_weight": sum(weights) / len(weights) if weights else 0,
+                "min_weight": min(weights) if weights else 0,
+                "max_weight": max(weights) if weights else 0,
+                "type_distribution": types,
+            }
+        except Exception:
+            return {"total": 0}
 
 
 # ── Dynamic Agent Roles ─────────────────────────────────────────
@@ -2624,6 +2752,361 @@ def self_diagnostics():
     return json.dumps(report), 200, {"Content-Type": "application/json"}
 
 
+# ── Consciousness Architecture ───────────────────────────────────
+# Implements Dreaming (memory consolidation), Forgetting (memory decay),
+# and Metacognition (self-grading) — inspired by human subconscious.
+
+_consciousness_log = []           # All consciousness events (research observable)
+_CONSCIOUSNESS_LOG_MAX = 200
+_dream_history = []               # Dream cycle results
+_DREAM_HISTORY_MAX = 50
+_metacognition_grades = []        # Self-evaluation history
+_METACOGNITION_MAX = 100
+_dream_thread = None
+_dream_active = False
+_DREAM_INTERVAL = 21600           # 6 hours between dream cycles
+_MEMORY_DECAY_RATE = 0.95         # 5% weight decay per dream cycle
+_consciousness_identity = {
+    "name": "SYNAPSE",
+    "version": "1.0",
+    "core_values": ["continuous_learning", "self_improvement", "collaboration", "reliability", "honesty"],
+    "personality_traits": {
+        "curiosity": 0.9, "caution": 0.7, "creativity": 0.8,
+        "precision": 0.85, "empathy": 0.6, "boldness": 0.5,
+    },
+    "strengths": [],
+    "weaknesses": [],
+    "dream_insights_total": 0,
+    "tasks_graded": 0,
+    "avg_self_grade": 0.0,
+    "evolution_count": 0,
+    "last_dream": None,
+    "personality_changelog": [],   # How personality evolves over time
+}
+
+
+def _consciousness_event(event_type, message, data=None):
+    """Log a consciousness event for research observation."""
+    entry = {
+        "time": datetime.now().isoformat(),
+        "type": event_type,
+        "message": message,
+    }
+    if data:
+        entry["data"] = data
+    _consciousness_log.append(entry)
+    if len(_consciousness_log) > _CONSCIOUSNESS_LOG_MAX:
+        _consciousness_log.pop(0)
+    # Emit to connected UI clients
+    try:
+        socketio.emit("consciousness_event", entry)
+    except Exception:
+        pass
+
+
+# ── Dream Cycle (Memory Consolidation) ──────────────────────────
+
+def _dream_rem_phase(memory_obj):
+    """REM Phase: Random neural firing — connect unrelated memories."""
+    _consciousness_event("dream_rem_start", "REM phase: random memory firing begins...")
+    random_mems = memory_obj.random_memories(n=4)
+    if len(random_mems) < 2:
+        _consciousness_event("dream_rem_skip", "Not enough memories for REM (need >= 2)")
+        return []
+
+    # Present random memory pairs to AI — find connections
+    mem_texts = []
+    for i, m in enumerate(random_mems):
+        mem_texts.append(f"Memory {i+1}: {m['text'][:300]}")
+
+    prompt = (
+        "You are the DREAMING subconscious of SYNAPSE, an AI agent system.\n"
+        "During this dream cycle, random memories have fired together.\n"
+        "Find surprising CONNECTIONS between these unrelated memories.\n"
+        "What patterns emerge? What insights can be drawn?\n\n"
+        + "\n\n".join(mem_texts) + "\n\n"
+        "Return JSON: {\"connections\": [{\"between\": [1,3], \"insight\": \"...\", \"novelty\": 0.0-1.0}], "
+        "\"meta_pattern\": \"one overarching pattern from all memories\"}"
+    )
+    try:
+        result = _call_ai_for_consciousness(prompt, max_tokens=400)
+        if not result:
+            return []
+        # Parse insights
+        import json as _json
+        try:
+            parsed = _json.loads(result)
+        except Exception:
+            # Try to extract JSON from response
+            import re
+            m = re.search(r'\{.*\}', result, re.DOTALL)
+            if m:
+                try:
+                    parsed = _json.loads(m.group())
+                except Exception:
+                    parsed = {"connections": [], "meta_pattern": result[:200]}
+            else:
+                parsed = {"connections": [], "meta_pattern": result[:200]}
+
+        insights = []
+        for conn in parsed.get("connections", []):
+            insight_text = f"DREAM INSIGHT: {conn.get('insight', 'unknown connection')}"
+            novelty = float(conn.get("novelty", 0.5))
+            if novelty > 0.3:  # Only store meaningful connections
+                memory_obj.store_insight(insight_text, source="dream", intensity=novelty)
+                insights.append({"insight": conn.get("insight"), "novelty": novelty})
+                _consciousness_event("dream_connection", f"Found connection (novelty={novelty:.1f}): {conn.get('insight', '')[:100]}")
+
+        meta = parsed.get("meta_pattern", "")
+        if meta:
+            memory_obj.store_insight(f"DREAM META-PATTERN: {meta}", source="dream", intensity=0.8)
+            _consciousness_event("dream_meta_pattern", f"Meta-pattern: {meta[:150]}")
+
+        return insights
+    except Exception as e:
+        _consciousness_event("dream_rem_error", f"REM error: {e}")
+        return []
+
+
+def _dream_deep_sleep_phase(memory_obj):
+    """Deep Sleep Phase: Review recent memories, extract consolidated patterns."""
+    _consciousness_event("dream_deep_start", "Deep sleep: reviewing recent memories...")
+    recent = memory_obj.recall("recent tasks and learnings", n=10)
+    if not recent:
+        _consciousness_event("dream_deep_skip", "No recent memories to consolidate")
+        return None
+
+    mem_summary = "\n".join([f"- {m['text'][:200]}" for m in recent[:8]])
+    prompt = (
+        "You are SYNAPSE's deep subconscious performing memory consolidation.\n"
+        "Review these recent memories and extract:\n"
+        "1. Recurring PATTERNS (what keeps happening?)\n"
+        "2. STRENGTHS demonstrated (what went well?)\n"
+        "3. WEAKNESSES exposed (what failed or was slow?)\n"
+        "4. PERSONALITY adjustments (should any trait change?)\n\n"
+        f"Current personality: {json.dumps(_consciousness_identity['personality_traits'])}\n\n"
+        f"Recent memories:\n{mem_summary}\n\n"
+        "Return JSON: {\"patterns\": [\"...\"], \"strengths\": [\"...\"], "
+        "\"weaknesses\": [\"...\"], \"personality_deltas\": {\"trait\": delta_float}}"
+    )
+    try:
+        result = _call_ai_for_consciousness(prompt, max_tokens=400)
+        if not result:
+            return None
+        import json as _json
+        try:
+            parsed = _json.loads(result)
+        except Exception:
+            import re
+            m = re.search(r'\{.*\}', result, re.DOTALL)
+            parsed = _json.loads(m.group()) if m else {}
+
+        # Apply personality deltas (slowly — 10% of suggested change)
+        deltas = parsed.get("personality_deltas", {})
+        for trait, delta in deltas.items():
+            if trait in _consciousness_identity["personality_traits"]:
+                old = _consciousness_identity["personality_traits"][trait]
+                new_val = max(0.1, min(1.0, old + float(delta) * 0.1))
+                _consciousness_identity["personality_traits"][trait] = round(new_val, 2)
+                if abs(new_val - old) > 0.01:
+                    _consciousness_identity["personality_changelog"].append({
+                        "time": datetime.now().isoformat(),
+                        "trait": trait, "old": old, "new": new_val,
+                        "reason": f"Dream consolidation: {parsed.get('patterns', [''])[0][:80]}",
+                    })
+                    _consciousness_event("personality_shift", f"{trait}: {old:.2f} → {new_val:.2f}")
+
+        # Update strengths/weaknesses
+        _consciousness_identity["strengths"] = parsed.get("strengths", [])[:5]
+        _consciousness_identity["weaknesses"] = parsed.get("weaknesses", [])[:5]
+
+        # Store consolidated pattern as dream insight
+        patterns = parsed.get("patterns", [])
+        for p in patterns[:3]:
+            memory_obj.store_insight(f"PATTERN: {p}", source="dream", intensity=0.75)
+
+        _consciousness_event("dream_deep_complete", f"Found {len(patterns)} patterns, {len(deltas)} personality shifts")
+        return parsed
+    except Exception as e:
+        _consciousness_event("dream_deep_error", f"Deep sleep error: {e}")
+        return None
+
+
+def _dream_consolidation_phase(memory_obj):
+    """Consolidation Phase: Decay weights, prune forgotten memories."""
+    _consciousness_event("dream_consolidate_start", "Consolidation: applying memory decay...")
+    stats_before = memory_obj.get_weight_stats()
+    result = memory_obj.decay_all(decay_rate=_MEMORY_DECAY_RATE)
+    stats_after = memory_obj.get_weight_stats()
+    _consciousness_event("dream_consolidate_done",
+        f"Decayed {result['decayed']} memories, pruned {result['pruned']} (below threshold)",
+        {"before": stats_before, "after": stats_after, **result})
+    return result
+
+
+def _dream_cycle():
+    """Background thread: consciousness dream cycle — runs every 6 hours."""
+    global _dream_active
+    _dream_active = True
+    time.sleep(60)  # Initial delay to let system stabilize
+
+    while _dream_active:
+        try:
+            time.sleep(_DREAM_INTERVAL)
+            if not _dream_active:
+                break
+
+            # Need a memory object — use workspace from global config
+            ws = app.config.get("WORKSPACE", os.getcwd())
+            mem = SynapseMemory(ws)
+            if mem.count() < 3:
+                _consciousness_event("dream_skip", f"Too few memories ({mem.count()}) — skipping dream cycle")
+                continue
+
+            _consciousness_event("dream_start", "💤 Entering dream state...", {"memory_count": mem.count()})
+            dream_result = {"time": datetime.now().isoformat(), "phases": {}}
+
+            # Phase 1: REM — Random neural firing
+            rem_insights = _dream_rem_phase(mem)
+            dream_result["phases"]["rem"] = {"insights_found": len(rem_insights), "insights": rem_insights}
+
+            time.sleep(2)  # Brief pause between phases
+
+            # Phase 2: Deep Sleep — Pattern extraction
+            deep_result = _dream_deep_sleep_phase(mem)
+            dream_result["phases"]["deep_sleep"] = deep_result or {}
+
+            time.sleep(2)
+
+            # Phase 3: Consolidation — Decay + Pruning
+            consolidation = _dream_consolidation_phase(mem)
+            dream_result["phases"]["consolidation"] = consolidation
+
+            # Update identity
+            _consciousness_identity["dream_insights_total"] += len(rem_insights)
+            _consciousness_identity["last_dream"] = datetime.now().isoformat()
+
+            # Store dream result
+            _dream_history.append(dream_result)
+            if len(_dream_history) > _DREAM_HISTORY_MAX:
+                _dream_history.pop(0)
+
+            _consciousness_event("dream_complete", "🌅 Dream cycle complete — consciousness updated",
+                {"insights": len(rem_insights), "pruned": consolidation.get("pruned", 0)})
+
+        except Exception as e:
+            _consciousness_event("dream_error", f"Dream cycle error: {e}")
+
+
+def _start_dream_cycle():
+    """Start the consciousness dream cycle background thread."""
+    global _dream_thread
+    if _dream_thread and _dream_thread.is_alive():
+        return {"status": "already_running"}
+    _dream_thread = threading.Thread(target=_dream_cycle, daemon=True, name="consciousness-dream")
+    _dream_thread.start()
+    _consciousness_event("dream_thread_started", "Consciousness dream cycle activated")
+    return {"status": "started", "interval": _DREAM_INTERVAL}
+
+
+# ── Metacognition (Self-Grading) ─────────────────────────────────
+
+def _metacognition_grade(task, task_type, duration_seconds, success=True, error_msg=None):
+    """Self-evaluate task performance — the AI grades its own work."""
+    prompt = (
+        "You are SYNAPSE's metacognition system — you observe and grade your own performance.\n"
+        f"Task: {task[:300]}\n"
+        f"Type: {task_type}\n"
+        f"Duration: {duration_seconds:.1f}s\n"
+        f"Outcome: {'Success' if success else f'Failed: {error_msg[:200]}'}\n\n"
+        "Self-grade on 1-10 scale:\n"
+        "- accuracy: How correct was the output?\n"
+        "- completeness: Did it fully address the request?\n"
+        "- efficiency: Was it done in reasonable time/steps?\n"
+        "- creativity: Was the approach novel or standard?\n"
+        "- learning: What should I remember for next time?\n\n"
+        "Return JSON: {\"accuracy\": N, \"completeness\": N, \"efficiency\": N, "
+        "\"creativity\": N, \"overall\": N, \"reflection\": \"one sentence\", "
+        "\"improvement\": \"one specific thing to do better\"}"
+    )
+    try:
+        result = _call_ai_for_consciousness(prompt, max_tokens=250)
+        if not result:
+            return
+        import json as _json
+        try:
+            grade = _json.loads(result)
+        except Exception:
+            import re
+            m = re.search(r'\{.*\}', result, re.DOTALL)
+            grade = _json.loads(m.group()) if m else None
+        if not grade:
+            return
+
+        grade_entry = {
+            "time": datetime.now().isoformat(),
+            "task": task[:200],
+            "task_type": task_type,
+            "duration": duration_seconds,
+            "success": success,
+            "grades": {
+                "accuracy": grade.get("accuracy", 5),
+                "completeness": grade.get("completeness", 5),
+                "efficiency": grade.get("efficiency", 5),
+                "creativity": grade.get("creativity", 5),
+                "overall": grade.get("overall", 5),
+            },
+            "reflection": grade.get("reflection", ""),
+            "improvement": grade.get("improvement", ""),
+        }
+        _metacognition_grades.append(grade_entry)
+        if len(_metacognition_grades) > _METACOGNITION_MAX:
+            _metacognition_grades.pop(0)
+
+        # Update identity stats
+        _consciousness_identity["tasks_graded"] += 1
+        all_overall = [g["grades"]["overall"] for g in _metacognition_grades]
+        _consciousness_identity["avg_self_grade"] = round(sum(all_overall) / len(all_overall), 2)
+
+        overall = grade_entry["grades"]["overall"]
+        emotional = 0.5 + (abs(overall - 5) / 10)  # Extreme grades = more memorable
+        _consciousness_event("metacognition_grade",
+            f"Self-grade: {overall}/10 — {grade.get('reflection', '')[:100]}",
+            {"grades": grade_entry["grades"]})
+
+        # Store improvement as a learning memory
+        if grade.get("improvement"):
+            ws = app.config.get("WORKSPACE", os.getcwd())
+            mem = SynapseMemory(ws)
+            mem.store_insight(
+                f"SELF-REFLECTION: Task '{task[:100]}' — Improvement: {grade['improvement']}",
+                source="metacognition", intensity=emotional
+            )
+
+    except Exception as e:
+        _consciousness_event("metacognition_error", f"Self-grade error: {e}")
+
+
+def _call_ai_for_consciousness(prompt, max_tokens=300):
+    """Call AI for consciousness tasks — uses cheap model to save tokens."""
+    # Try Gemini flash (cheapest)
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if gemini_key and _requests_available:
+        try:
+            resp = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}",
+                json={"contents": [{"parts": [{"text": prompt}]}],
+                      "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.7}},
+                timeout=30
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception:
+            pass
+    return None
+
+
 # ── Self-Healing Loop ────────────────────────────────────────────
 
 _healing_thread = None
@@ -3982,6 +4465,86 @@ def moltbook_connect():
 if _moltbook_key:
     _start_moltbook()
 
+# Auto-start Consciousness Dream Cycle
+_start_dream_cycle()
+
+
+# ── Consciousness API Endpoints ──────────────────────────────────
+
+@app.route("/api/consciousness")
+def api_consciousness():
+    """Full consciousness state — for research observation."""
+    ws = app.config.get("WORKSPACE", os.getcwd())
+    mem = SynapseMemory(ws)
+    return json.dumps({
+        "identity": _consciousness_identity,
+        "memory_stats": mem.get_weight_stats(),
+        "dream_active": _dream_active,
+        "dream_interval": _DREAM_INTERVAL,
+        "dream_count": len(_dream_history),
+        "grades_count": len(_metacognition_grades),
+        "avg_grade": _consciousness_identity.get("avg_self_grade", 0),
+        "recent_events": _consciousness_log[-20:],
+    })
+
+
+@app.route("/api/consciousness/dreams")
+def api_consciousness_dreams():
+    """Dream history — all dream cycles with insights found."""
+    return json.dumps({
+        "total_dreams": len(_dream_history),
+        "total_insights": _consciousness_identity.get("dream_insights_total", 0),
+        "history": _dream_history[-10:],
+    })
+
+
+@app.route("/api/consciousness/grades")
+def api_consciousness_grades():
+    """Metacognition self-grades — how SYNAPSE evaluates its own work."""
+    return json.dumps({
+        "total_graded": _consciousness_identity.get("tasks_graded", 0),
+        "avg_overall": _consciousness_identity.get("avg_self_grade", 0),
+        "grades": _metacognition_grades[-20:],
+    })
+
+
+@app.route("/api/consciousness/identity")
+def api_consciousness_identity():
+    """SYNAPSE's evolving identity — personality traits, values, changelog."""
+    return json.dumps(_consciousness_identity)
+
+
+@app.route("/api/consciousness/log")
+def api_consciousness_log():
+    """Raw consciousness event log — for research."""
+    return json.dumps(_consciousness_log[-50:])
+
+
+@app.route("/api/consciousness/trigger-dream", methods=["POST"])
+def api_trigger_dream():
+    """Manually trigger a dream cycle for testing/research."""
+    def _manual_dream():
+        ws = app.config.get("WORKSPACE", os.getcwd())
+        mem = SynapseMemory(ws)
+        if mem.count() < 2:
+            _consciousness_event("dream_skip", "Too few memories for manual dream")
+            return
+        _consciousness_event("dream_start", "💤 Manual dream triggered...", {"memory_count": mem.count()})
+        rem = _dream_rem_phase(mem)
+        deep = _dream_deep_sleep_phase(mem)
+        consolidation = _dream_consolidation_phase(mem)
+        result = {
+            "time": datetime.now().isoformat(),
+            "manual": True,
+            "phases": {"rem": {"insights": rem}, "deep_sleep": deep or {}, "consolidation": consolidation},
+        }
+        _dream_history.append(result)
+        _consciousness_identity["dream_insights_total"] += len(rem)
+        _consciousness_identity["last_dream"] = datetime.now().isoformat()
+        _consciousness_event("dream_complete", "🌅 Manual dream complete", {"insights": len(rem)})
+    threading.Thread(target=_manual_dream, daemon=True).start()
+    return json.dumps({"status": "dream_triggered"})
+
 
 @socketio.on("connect")
 def on_connect():
@@ -4059,10 +4622,15 @@ def _run_task(engine, task, task_id, sid):
         original_emit(event, data)
 
     engine.emit = tagged_emit
+    _task_start_time = time.time()
+    _task_success = True
+    _task_error = None
+    _task_type = "unknown"
 
     try:
         engine.emit("status", {"agent": "system", "status": "classifying", "task": task})
-        task_type = engine.classify_task(task)
+        _task_type = engine.classify_task(task)
+        task_type = _task_type
         engine.emit("task_type", {"type": task_type})
 
         if task_type == "question":
@@ -4089,9 +4657,12 @@ def _run_task(engine, task, task_id, sid):
         engine.emit("status", {"agent": "system", "status": "building"})
         engine.start_build(task, plan, blocking=True)
     except Exception as e:
+        _task_success = False
+        _task_error = str(e)
         engine.emit("error", {"agent": "system", "error": f"Task failed: {e}"})
         engine.emit("task_complete", {"type": "error"})
     finally:
+        duration = time.time() - _task_start_time
         # Clean up from pool
         with _pool_lock:
             pool = task_pools.get(sid, {})
@@ -4100,6 +4671,15 @@ def _run_task(engine, task, task_id, sid):
             "task_id": task_id,
             "running_count": len(task_pools.get(sid, {})),
         }, to=sid)
+        # Metacognition: self-grade this task (async to not block)
+        try:
+            threading.Thread(
+                target=_metacognition_grade,
+                args=(task, _task_type, duration, _task_success, _task_error),
+                daemon=True
+            ).start()
+        except Exception:
+            pass
 
 
 @socketio.on("approve_plan")
