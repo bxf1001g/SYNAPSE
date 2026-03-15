@@ -21,7 +21,6 @@ import re
 import socket
 import subprocess
 import sys
-import time
 from datetime import datetime
 
 try:
@@ -31,7 +30,7 @@ except ImportError:
     print("Missing dependency. Run: pip install google-genai")
     sys.exit(1)
 
-from protocol import encode_message, decode_message
+from protocol import decode_message, encode_message
 
 # ── Terminal Colors ──────────────────────────────────────────
 
@@ -250,7 +249,7 @@ class AIAgent:
         # Log file
         self.log_path = os.path.join(self.workspace, ".conversation.log")
         with open(self.log_path, "w", encoding="utf-8") as f:
-            f.write(f"# Agent Conversation Log\n")
+            f.write("# Agent Conversation Log\n")
             f.write(f"# Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"# Role: {role}\n\n")
 
@@ -399,6 +398,7 @@ class AIAgent:
                 ),
             )
 
+            cmd_output = ""
             for iteration in range(self.max_local_iters):
                 response = chat.send_message(prompt if iteration == 0 else
                     f"Command results:\n\n{cmd_output}\n\nNow provide your final 'answer' action.")
@@ -766,7 +766,7 @@ class AIAgent:
         print(f"  {C_THINK}(Be specific: app type, features, tech stack){C_RESET}")
 
         try:
-            task = input(f"\n  Task ▶ ").strip()
+            task = input("\n  Task ▶ ").strip()
         except (EOFError, KeyboardInterrupt):
             return
 
@@ -787,7 +787,7 @@ class AIAgent:
 
         # ── Phase 1: Planning ─────────────────────────────────
         print(f"\n{C_SYS}  {'─' * 50}")
-        print(f"  📋 Phase 1: Creating project plan...")
+        print("  📋 Phase 1: Creating project plan...")
         print(f"  {'─' * 50}{C_RESET}\n")
 
         plan = self.create_plan(task)
@@ -797,7 +797,7 @@ class AIAgent:
 
             print(f"  {C_BOLD}Review the plan above.{C_RESET}")
             try:
-                approval = input(f"  Accept and start building? [Y/n] ▶ ").strip().lower()
+                approval = input("  Accept and start building? [Y/n] ▶ ").strip().lower()
             except (EOFError, KeyboardInterrupt):
                 return
 
@@ -824,7 +824,7 @@ class AIAgent:
 
         # ── Phase 2: Building ─────────────────────────────────
         print(f"\n{C_SYS}  {'─' * 50}")
-        print(f"  🚀 Phase 2: Building — agents collaborating...")
+        print("  🚀 Phase 2: Building — agents collaborating...")
         print(f"  {'─' * 50}{C_RESET}")
 
         self.process_turn(first_step_prompt)

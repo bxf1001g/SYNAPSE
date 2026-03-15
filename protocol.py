@@ -11,8 +11,8 @@ Message types:
 """
 
 import json
-import struct
 import socket
+import struct
 
 HEADER_SIZE = 4  # 4-byte big-endian length prefix
 

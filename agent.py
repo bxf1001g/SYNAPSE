@@ -19,9 +19,8 @@ import subprocess
 import sys
 import threading
 import uuid
-import os
 
-from protocol import encode_message, decode_message, make_chat, make_cmd, make_cmd_result, make_system
+from protocol import decode_message, encode_message, make_chat, make_cmd, make_cmd_result, make_system
 
 DEFAULT_PORT = 5000
 PROMPT = "  You > "

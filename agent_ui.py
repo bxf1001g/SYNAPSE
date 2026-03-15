@@ -14,16 +14,13 @@ Usage:
 import argparse
 import base64
 import concurrent.futures
-import glob as globmod
 import json
 import os
 import re
 import subprocess
-import sys
 import threading
 import time
 from datetime import datetime
-from queue import Queue, Empty
 
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO
@@ -84,9 +81,8 @@ except ImportError:
     _docker_sdk = None
 
 # A2A Protocol (Agent-to-Agent)
-import uuid as _uuid
-import hashlib as _hashlib
-
+import hashlib as _hashlib  # noqa: E402
+import uuid as _uuid  # noqa: E402
 
 # ── A2A Protocol (Agent-to-Agent Interoperability) ──────────────
 
@@ -1141,7 +1137,8 @@ RESPOND WITH ONLY JSON (no markdown fences):
     {{"type": "browse", "url": "https://example.com/api/docs"}},
     {{"type": "github", "operation": "clone", "repo_url": "https://github.com/user/repo"}},
     {{"type": "github", "operation": "create_repo", "name": "my-project", "description": "desc"}},
-    {{"type": "github", "operation": "create_pr", "repo": "user/repo", "title": "PR title", "head": "feature", "base": "main"}},
+    {{"type": "github", "operation": "create_pr", "repo": "user/repo",
+      "title": "PR title", "head": "feature", "base": "main"}},
     {{"type": "github", "operation": "list_issues", "repo": "user/repo"}},
     {{"type": "self_modify", "reason": "why", "files": [{{"path": "agent_ui.py", "content": "new code"}}]}},
     {{"type": "done", "summary": "project summary"}}
@@ -1507,7 +1504,7 @@ class AgentEngine:
             exit_code = result.get("StatusCode", -1)
             container.remove(force=True)
             return f"{logs}\n\nExit code: {exit_code}"
-        except Exception as e:
+        except Exception:
             return None  # Fallback to local
 
     # ── Question Answering (full scripting power) ────────────
@@ -1961,11 +1958,11 @@ class AgentEngine:
                     )
                     break
                 current_input = (
-                    f"Some commands failed:\n\n"
+                    "Some commands failed:\n\n"
                     + "\n\n".join(cmd_results)
-                    + f"\n\nPLATFORM: Windows 11. "
-                    f"Use 'if not exist DIR mkdir DIR' for mkdir. "
-                    f"Fix errors and include 'message' action."
+                    + "\n\nPLATFORM: Windows 11. "
+                    "Use 'if not exist DIR mkdir DIR' for mkdir. "
+                    "Fix errors and include 'message' action."
                 )
                 peer_message = None
                 continue
@@ -2198,10 +2195,11 @@ class AgentEngine:
                 return "self_modify (cloud): no valid files written"
 
             # 2. Git: create branch, commit, push
-            git = lambda cmd: subprocess.run(
-                f"git {cmd}", shell=True, cwd=project_root,
-                capture_output=True, text=True, timeout=60,
-            )
+            def git(cmd):
+                return subprocess.run(
+                            f"git {cmd}", shell=True, cwd=project_root,
+                            capture_output=True, text=True, timeout=60,
+                        )
 
             # Configure git for cloud environment
             git("config user.email synapse-agent@noreply.github.com")
@@ -2621,7 +2619,8 @@ _task_counter = 0
 term_mgr = None
 
 # Graceful shutdown for Cloud Run SIGTERM
-import signal as _signal
+import signal as _signal  # noqa: E402
+
 
 def _graceful_shutdown(signum, frame):
     """Handle SIGTERM from Cloud Run — close SocketIO sessions cleanly."""
@@ -2774,7 +2773,7 @@ def _tg_send(text, parse_mode=None):
         payload = {"chat_id": _TG_CHAT_ID, "text": text[:4000]}
         if parse_mode:
             payload["parse_mode"] = parse_mode
-        resp = requests.post(
+        resp = _requests.post(
             f"https://api.telegram.org/bot{_TG_TOKEN}/sendMessage",
             json=payload, timeout=15
         )
@@ -2864,7 +2863,11 @@ def _tg_handle_command(text):
             })
             _consciousness_identity["dream_insights_total"] += len(rem)
             _consciousness_identity["last_dream"] = datetime.now().isoformat()
-            summary = f"Dream complete!\n\nInsights found: {len(rem)}\nMemories decayed: {consolidation.get('decayed', 0)}\nMemories pruned: {consolidation.get('pruned', 0)}"
+            summary = (
+                f"Dream complete!\n\nInsights found: {len(rem)}\n"
+                f"Memories decayed: {consolidation.get('decayed', 0)}\n"
+                f"Memories pruned: {consolidation.get('pruned', 0)}"
+            )
             if rem:
                 summary += "\n\nInsights:\n" + "\n".join(["- " + r.get("insight", "")[:100] for r in rem[:3]])
             _tg_send(summary)
@@ -2972,7 +2975,7 @@ def _tg_poll_loop():
 
             # Poll for new messages
             params = {"timeout": 10, "offset": _TG_LAST_UPDATE_ID + 1}
-            resp = requests.get(
+            resp = _requests.get(
                 f"https://api.telegram.org/bot{_TG_TOKEN}/getUpdates",
                 params=params, timeout=15
             )
@@ -3151,7 +3154,11 @@ def _dream_rem_phase(memory_obj):
             if novelty > 0.3:  # Only store meaningful connections
                 memory_obj.store_insight(insight_text, source="dream", intensity=novelty)
                 insights.append({"insight": conn.get("insight"), "novelty": novelty})
-                _consciousness_event("dream_connection", f"Found connection (novelty={novelty:.1f}): {conn.get('insight', '')[:100]}")
+                _consciousness_event(
+                    "dream_connection",
+                    f"Found connection (novelty={novelty:.1f}): "
+                    f"{conn.get('insight', '')[:100]}"
+                )
 
         meta = parsed.get("meta_pattern", "")
         if meta:
@@ -3389,8 +3396,9 @@ def _call_ai_for_consciousness(prompt, max_tokens=300):
     gemini_key = os.environ.get("GEMINI_API_KEY", "")
     if gemini_key and _requests_available:
         try:
-            resp = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}",
+            resp = _requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"gemini-2.0-flash:generateContent?key={gemini_key}",
                 json={"contents": [{"parts": [{"text": prompt}]}],
                       "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.7}},
                 timeout=30
@@ -3456,7 +3464,7 @@ def _self_heal_loop():
 
             # Get the config and try to call AI for diagnosis
             config = app.config.get("SYNAPSE_CONFIG", {})
-            workspace = app.config.get("WORKSPACE", "./workspace")
+            app.config.get("WORKSPACE", "./workspace")
 
             # Build error report for AI
             recent_errors = _error_log[-20:]
@@ -3465,38 +3473,37 @@ def _self_heal_loop():
                 for e in recent_errors
             )
 
-            diagnosis_prompt = f"""You are SYNAPSE's self-healing system. Analyze these recurring errors from the Cloud Run deployment and generate a fix.
-
-RECURRING ERROR CATEGORIES: {json.dumps(recurring)}
-
-RECENT ERROR LOG:
-{error_text}
-
-CURRENT SYSTEM:
-- Running on Google Cloud Run with gunicorn + eventlet
-- Flask + Flask-SocketIO backend
-- Main file: agent_ui.py
-- Dockerfile uses: gunicorn --worker-class eventlet --workers 1
-
-RULES:
-1. Only fix errors you are confident about. Don't change unrelated code.
-2. If the fix requires changing agent_ui.py or Dockerfile, provide the EXACT file content changes.
-3. For configuration fixes, prefer environment variables or gunicorn flags.
-4. NEVER change API keys or security-sensitive code.
-5. If you cannot determine a safe fix, respond with "NO_FIX_NEEDED".
-
-Respond in this JSON format:
-{{
-  "diagnosis": "brief description of the root cause",
-  "confidence": 0.0-1.0,
-  "fix_type": "code_change" | "config_change" | "no_fix",
-  "files": [
-    {{"path": "relative/path.py", "search": "exact text to find", "replace": "replacement text"}}
-  ],
-  "reason": "why this fix will resolve the errors"
-}}
-
-Only respond with the JSON, nothing else."""
+            diagnosis_prompt = (
+                "You are SYNAPSE's self-healing system. "
+                "Analyze these recurring errors from the Cloud Run "
+                "deployment and generate a fix.\n\n"
+                f"RECURRING ERROR CATEGORIES: {json.dumps(recurring)}\n\n"
+                f"RECENT ERROR LOG:\n{error_text}\n\n"
+                "CURRENT SYSTEM:\n"
+                "- Running on Google Cloud Run with gunicorn + eventlet\n"
+                "- Flask + Flask-SocketIO backend\n"
+                "- Main file: agent_ui.py\n"
+                "- Dockerfile uses: gunicorn --worker-class eventlet --workers 1\n\n"
+                "RULES:\n"
+                "1. Only fix errors you are confident about.\n"
+                "2. If the fix requires changing agent_ui.py or Dockerfile, "
+                "provide the EXACT file content changes.\n"
+                "3. For configuration fixes, prefer environment variables.\n"
+                "4. NEVER change API keys or security-sensitive code.\n"
+                "5. If you cannot determine a safe fix, respond with "
+                '"NO_FIX_NEEDED".\n\n'
+                "Respond in this JSON format:\n"
+                "{\n"
+                '  "diagnosis": "brief description of the root cause",\n'
+                '  "confidence": 0.0-1.0,\n'
+                '  "fix_type": "code_change" | "config_change" | "no_fix",\n'
+                '  "files": [\n'
+                '    {"path": "relative/path.py", "search": "exact text to find",'
+                ' "replace": "replacement text"}\n'
+                "  ],\n"
+                '  "reason": "why this fix will resolve the errors"\n'
+                "}\n\nOnly respond with the JSON, nothing else."
+            )
 
             # Call AI for diagnosis
             fix_data = _call_healer_ai(config, diagnosis_prompt)
@@ -3677,10 +3684,11 @@ def _apply_heal_fix(project_root, files, fix_data, config):
         if not token:
             token = os.environ.get("GITHUB_TOKEN", "")
 
-        git = lambda cmd: subprocess.run(
-            f"git {cmd}", shell=True, cwd=project_root,
-            capture_output=True, text=True, timeout=60,
-        )
+        def git(cmd):
+            return subprocess.run(
+                    f"git {cmd}", shell=True, cwd=project_root,
+                    capture_output=True, text=True, timeout=60,
+                )
 
         reason = fix_data.get("reason", "self-healing fix")[:80]
         branch = f"synapse-heal-{int(time.time())}"
@@ -4518,10 +4526,11 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
         if not token:
             token = os.environ.get("GITHUB_TOKEN", "")
 
-        git = lambda cmd: subprocess.run(
-            f"git {cmd}", shell=True, cwd=project_root,
-            capture_output=True, text=True, timeout=60,
-        )
+        def git(cmd):
+            return subprocess.run(
+                    f"git {cmd}", shell=True, cwd=project_root,
+                    capture_output=True, text=True, timeout=60,
+                )
 
         branch = f"synapse-evolve-{timestamp}"
 
@@ -5246,8 +5255,7 @@ def vision_analyze():
     file = request.files["image"]
     prompt = request.form.get("prompt", "Describe this image in detail.")
     image_data = file.read()
-    b64 = base64.b64encode(image_data).decode("utf-8")
-    mime = file.content_type or "image/png"
+    base64.b64encode(image_data).decode("utf-8")
 
     config = app.config.get("SYNAPSE_CONFIG", load_config("."))
     cortex = NeuralCortex(config)
@@ -5508,11 +5516,11 @@ def main():
     print("  ◈ ════════════════════════════════════════")
     print(f"  🌐 Open: http://localhost:{args.port}")
     print(f"  📁 Workspace: {workspace}")
-    print(f"  🔑 Providers:")
+    print("  🔑 Providers:")
     for pid, pcfg in config["providers"].items():
         status = "✓" if pcfg.get("api_key") and pcfg.get("enabled") else "✗"
         print(f"     {status} {pid}")
-    print(f"  🧠 Neural Cortices:")
+    print("  🧠 Neural Cortices:")
     cortex_map = config.get("cortex_map", {})
     for cid, cfg in CORTEX_MODELS.items():
         mapping = cortex_map.get(cid, {})

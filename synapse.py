@@ -18,7 +18,6 @@ import argparse
 import json
 import os
 import shutil
-import signal
 import subprocess
 import sys
 import time
@@ -104,8 +103,8 @@ def validate_html_file(filepath):
 
 def health_check(port, timeout=HEALTH_TIMEOUT):
     """Check if the agent is responding on the given port."""
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     deadline = time.time() + timeout
     while time.time() < deadline:
