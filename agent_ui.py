@@ -2777,8 +2777,12 @@ def _tg_send(text, parse_mode=None):
             f"https://api.telegram.org/bot{_TG_TOKEN}/sendMessage",
             json=payload, timeout=15
         )
-        return resp.status_code == 200 and resp.json().get("ok", False)
-    except Exception:
+        ok = resp.status_code == 200 and resp.json().get("ok", False)
+        if not ok:
+            print(f"[TG] sendMessage failed: {resp.status_code}", flush=True)
+        return ok
+    except Exception as exc:
+        print(f"[TG] sendMessage error: {exc}", flush=True)
         return False
 
 
@@ -2959,10 +2963,15 @@ def _tg_poll_loop():
     """Background thread: poll Telegram for new messages."""
     global _tg_active, _TG_LAST_UPDATE_ID
     _tg_active = True
+    _consecutive_errors = 0
 
     # Send startup notification
-    _tg_send("SYNAPSE Telegram bridge started.\nSend /start for commands.")
+    sent_ok = _tg_send(
+        "SYNAPSE Telegram bridge started.\nSend /start for commands."
+    )
     _tg_log_event("out", "Bridge started")
+    if not sent_ok:
+        print("[TG] WARNING: startup message failed to send", flush=True)
 
     while _tg_active:
         try:
@@ -2971,26 +2980,40 @@ def _tg_poll_loop():
                 msg = _tg_event_queue.pop(0)
                 _tg_send(msg)
                 _tg_log_event("out", msg[:100])
-                time.sleep(0.5)  # Rate limit
+                time.sleep(0.5)
 
-            # Poll for new messages
-            params = {"timeout": 10, "offset": _TG_LAST_UPDATE_ID + 1}
+            if not _requests_available or _requests is None:
+                print("[TG] requests library not available", flush=True)
+                time.sleep(30)
+                continue
+
+            # Poll for new messages (short poll to avoid eventlet issues)
+            params = {"timeout": 5, "offset": _TG_LAST_UPDATE_ID + 1}
             resp = _requests.get(
                 f"https://api.telegram.org/bot{_TG_TOKEN}/getUpdates",
-                params=params, timeout=15
+                params=params, timeout=10
             )
             if resp.status_code != 200:
+                print(
+                    f"[TG] getUpdates HTTP {resp.status_code}", flush=True
+                )
                 time.sleep(_TG_POLL_INTERVAL)
                 continue
 
             data = resp.json()
-            for update in data.get("result", []):
+            updates = data.get("result", [])
+            if updates:
+                print(
+                    f"[TG] Got {len(updates)} update(s)", flush=True
+                )
+            _consecutive_errors = 0
+
+            for update in updates:
                 _TG_LAST_UPDATE_ID = update["update_id"]
                 msg = update.get("message", {})
                 text = msg.get("text", "")
                 chat_id = str(msg.get("chat", {}).get("id", ""))
 
-                # Only respond to authorized chat
                 if chat_id != _TG_CHAT_ID:
                     continue
 
@@ -3001,8 +3024,15 @@ def _tg_poll_loop():
                         _tg_send(response)
                         _tg_log_event("out", response[:100])
 
-        except Exception:
-            pass
+        except Exception as exc:
+            _consecutive_errors += 1
+            print(
+                f"[TG] Poll error #{_consecutive_errors}: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            if _consecutive_errors > 10:
+                time.sleep(30)  # back off on repeated failures
         time.sleep(_TG_POLL_INTERVAL)
 
 
