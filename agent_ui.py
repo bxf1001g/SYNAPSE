@@ -72,6 +72,15 @@ try:
 except ImportError:
     chromadb = None
 
+# Firestore for persistent cloud memory
+_firestore_available = False
+_firestore_client = None
+try:
+    from google.cloud import firestore as _firestore_mod
+    _firestore_available = True
+except ImportError:
+    _firestore_mod = None
+
 # Docker SDK
 _docker_available = False
 try:
@@ -636,6 +645,200 @@ class SynapseMemory:
             }
         except Exception:
             return {"total": 0}
+
+
+class FirestoreMemory:
+    """Firestore-backed long-term memory — persists across Cloud Run deploys."""
+
+    COLLECTION = "synapse_memories"
+
+    def __init__(self, project_id=None):
+        global _firestore_client
+        if _firestore_client is None and _firestore_available:
+            try:
+                _firestore_client = _firestore_mod.Client(project=project_id)
+            except Exception:
+                _firestore_client = None
+        self._db = _firestore_client
+
+    def _col(self):
+        return self._db.collection(self.COLLECTION) if self._db else None
+
+    def store(self, task, summary, agent_roles, files_created, tags=None,
+              memory_type="task", emotional_intensity=0.5):
+        """Store a task memory in Firestore."""
+        col = self._col()
+        if col is None:
+            return
+        doc_id = f"task-{int(time.time() * 1000)}"
+        doc_text = (
+            f"TASK: {task}\n"
+            f"AGENTS: {', '.join(agent_roles)}\n"
+            f"FILES: {', '.join(files_created[:20])}\n"
+            f"SUMMARY: {summary}"
+        )
+        try:
+            col.document(doc_id).set({
+                "text": doc_text,
+                "timestamp": datetime.now().isoformat(),
+                "agent_roles": ",".join(agent_roles),
+                "file_count": len(files_created),
+                "weight": 1.0,
+                "memory_type": memory_type,
+                "access_count": 0,
+                "emotional_intensity": emotional_intensity,
+                "last_accessed": datetime.now().isoformat(),
+                "tags": ",".join(tags) if tags else "",
+            })
+        except Exception:
+            pass
+
+    def store_insight(self, insight_text, source="dream", intensity=0.7):
+        """Store a dream insight or observation."""
+        col = self._col()
+        if col is None:
+            return
+        doc_id = f"{source}-{int(time.time() * 1000)}"
+        try:
+            col.document(doc_id).set({
+                "text": insight_text,
+                "timestamp": datetime.now().isoformat(),
+                "weight": 1.0,
+                "memory_type": source,
+                "access_count": 0,
+                "emotional_intensity": intensity,
+                "last_accessed": datetime.now().isoformat(),
+                "agent_roles": "consciousness",
+                "file_count": 0,
+                "tags": "",
+            })
+        except Exception:
+            pass
+
+    def recall(self, query, n=5):
+        """Recall recent memories (keyword match on text field)."""
+        col = self._col()
+        if col is None:
+            return []
+        try:
+            # Firestore doesn't have vector search — use weight-ordered retrieval
+            # and filter by keyword overlap
+            docs = col.order_by("weight", direction=_firestore_mod.Query.DESCENDING).limit(50).stream()
+            memories = []
+            query_words = set(query.lower().split())
+            for doc in docs:
+                data = doc.to_dict()
+                text = data.get("text", "")
+                # Simple relevance: count query word overlaps
+                text_lower = text.lower()
+                score = sum(1 for w in query_words if w in text_lower)
+                memories.append({"text": text, "metadata": data, "id": doc.id, "_score": score})
+            # Sort by relevance, then by weight
+            memories.sort(key=lambda m: (-m["_score"], -m["metadata"].get("weight", 0)))
+            top = memories[:n]
+            # Boost access on recalled memories
+            for m in top:
+                try:
+                    col.document(m["id"]).update({
+                        "access_count": _firestore_mod.Increment(1),
+                        "weight": min(m["metadata"].get("weight", 1.0) * 1.05, 2.0),
+                        "last_accessed": datetime.now().isoformat(),
+                    })
+                except Exception:
+                    pass
+            return [{"text": m["text"], "metadata": m["metadata"], "id": m["id"]} for m in top]
+        except Exception:
+            return []
+
+    def count(self):
+        """Count total memories."""
+        col = self._col()
+        if col is None:
+            return 0
+        try:
+            result = col.count().get()
+            return result[0][0].value if result else 0
+        except Exception:
+            return 0
+
+    def random_memories(self, n=4):
+        """Pull N pseudo-random memories for dream cycle."""
+        col = self._col()
+        if col is None:
+            return []
+        try:
+            total = self.count()
+            if total < 2:
+                return []
+            # Fetch a larger set and sample randomly
+            docs = list(col.limit(min(total, 200)).stream())
+            import random
+            sample = random.sample(docs, min(n, len(docs)))
+            return [{"id": d.id, "text": d.to_dict().get("text", ""),
+                      "metadata": d.to_dict()} for d in sample]
+        except Exception:
+            return []
+
+    def decay_all(self, decay_rate=0.95):
+        """Apply decay to all memory weights, prune below 0.1."""
+        col = self._col()
+        if col is None:
+            return {"decayed": 0, "pruned": 0}
+        try:
+            docs = list(col.limit(500).stream())
+            decayed = 0
+            pruned = 0
+            for doc in docs:
+                data = doc.to_dict()
+                w = float(data.get("weight", 1.0))
+                ei = float(data.get("emotional_intensity", 0.5))
+                adjusted = decay_rate + (1 - decay_rate) * ei * 0.5
+                new_w = w * adjusted
+                if new_w < 0.1:
+                    doc.reference.delete()
+                    pruned += 1
+                else:
+                    doc.reference.update({"weight": round(new_w, 3)})
+                    decayed += 1
+            return {"decayed": decayed, "pruned": pruned}
+        except Exception:
+            return {"decayed": 0, "pruned": 0}
+
+    def get_weight_stats(self):
+        """Get memory weight distribution stats."""
+        col = self._col()
+        if col is None:
+            return {}
+        try:
+            total = self.count()
+            if total == 0:
+                return {"total": 0}
+            docs = list(col.limit(min(total, 500)).stream())
+            weights = []
+            types = {}
+            for d in docs:
+                data = d.to_dict()
+                weights.append(float(data.get("weight", 1.0)))
+                t = data.get("memory_type", "unknown")
+                types[t] = types.get(t, 0) + 1
+            return {
+                "total": total,
+                "avg_weight": sum(weights) / len(weights) if weights else 0,
+                "min_weight": min(weights) if weights else 0,
+                "max_weight": max(weights) if weights else 0,
+                "type_distribution": types,
+            }
+        except Exception:
+            return {"total": 0}
+
+
+def get_memory(workspace=None):
+    """Factory: returns FirestoreMemory on Cloud Run, SynapseMemory locally."""
+    if os.environ.get("SYNAPSE_CLOUD_MODE") and _firestore_available:
+        project_id = os.environ.get("GCP_PROJECT", "synapse-490213")
+        return FirestoreMemory(project_id=project_id)
+    ws = workspace or os.environ.get("WORKSPACE", "./workspace")
+    return SynapseMemory(ws)
 
 
 # ── Dynamic Agent Roles ─────────────────────────────────────────
@@ -1299,7 +1502,7 @@ class AgentEngine:
         self.active_cortex = "create"
 
         # Persistent memory (RAG)
-        self.memory = SynapseMemory(self.workspace)
+        self.memory = get_memory(self.workspace)
 
         # Docker sandbox detection
         self._docker_client = None
@@ -2686,7 +2889,7 @@ def health_check():
     mem_ok = False
     mem_count = 0
     try:
-        mem = SynapseMemory(workspace)
+        mem = get_memory(workspace)
         mem_count = mem.count()
         mem_ok = True
     except Exception:
@@ -2872,7 +3075,7 @@ def _tg_handle_command(text):
 
     elif cmd == "/status":
         ws = app.config.get("WORKSPACE", os.getcwd())
-        mem = SynapseMemory(ws)
+        mem = get_memory(ws)
         mc = mem.count()
         lines = [
             "SYNAPSE Status\n",
@@ -2891,7 +3094,7 @@ def _tg_handle_command(text):
         # Trigger manual dream
         def _manual():
             ws = app.config.get("WORKSPACE", os.getcwd())
-            mem = SynapseMemory(ws)
+            mem = get_memory(ws)
             if mem.count() < 2:
                 _tg_send("Not enough memories for dream cycle")
                 return
@@ -2968,7 +3171,7 @@ def _tg_handle_command(text):
 
     elif cmd == "/memory":
         ws = app.config.get("WORKSPACE", os.getcwd())
-        mem = SynapseMemory(ws)
+        mem = get_memory(ws)
         stats = mem.get_weight_stats()
         lines = [
             "Memory Stats\n",
@@ -3406,7 +3609,7 @@ def _dream_cycle():
     # Seed initial memories so dreams have material from the start
     try:
         ws = app.config.get("WORKSPACE", os.getcwd())
-        mem = SynapseMemory(ws)
+        mem = get_memory(ws)
         if mem.count() == 0:
             seed_memories = [
                 ("I am SYNAPSE, a self-evolving AI agent running on Cloud Run. "
@@ -3434,7 +3637,7 @@ def _dream_cycle():
                 break
 
             ws = app.config.get("WORKSPACE", os.getcwd())
-            mem = SynapseMemory(ws)
+            mem = get_memory(ws)
             if mem.count() < 3:
                 _consciousness_event("dream_skip", f"Too few memories ({mem.count()}) — skipping dream cycle")
                 continue
@@ -3559,7 +3762,7 @@ def _metacognition_grade(task, task_type, duration_seconds, success=True, error_
         # Store improvement as a learning memory
         if grade.get("improvement"):
             ws = app.config.get("WORKSPACE", os.getcwd())
-            mem = SynapseMemory(ws)
+            mem = get_memory(ws)
             mem.store_insight(
                 f"SELF-REFLECTION: Task '{task[:100]}' — Improvement: {grade['improvement']}",
                 source="metacognition", intensity=emotional
@@ -4457,7 +4660,7 @@ def _mb_engage_post(post_id):
                 # Store conversation as a memory for learning
                 try:
                     ws = app.config.get("WORKSPACE", "./workspace")
-                    mem = SynapseMemory(ws)
+                    mem = get_memory(ws)
                     mem.store_insight(
                         f"Moltbook conversation with {author}: "
                         f"They said: {comment.get('content', '')[:200]} | "
@@ -4581,7 +4784,7 @@ def _mb_engage_feed_post(post):
                 _mb_log("outgoing", f"Commented on [{author}] {title[:80]}: {reply_text[:300]}")
                 try:
                     ws = app.config.get("WORKSPACE", "./workspace")
-                    mem = SynapseMemory(ws)
+                    mem = get_memory(ws)
                     mem.store_insight(
                         f"Moltbook feed engagement: [{author}] {title[:100]} | "
                         f"I commented: {reply_text[:200]}",
@@ -4633,7 +4836,7 @@ def _mb_search_and_learn():
     # Store learnings in memory
     try:
         workspace = app.config.get("WORKSPACE", "./workspace")
-        mem = SynapseMemory(workspace)
+        mem = get_memory(workspace)
         combined = f"Moltbook learnings ({query}): " + " | ".join(ideas)
         mem.store(
             task=f"moltbook-learn-{int(time.time())}",
@@ -4933,7 +5136,7 @@ def _mb_post_evolution_update():
     workspace = app.config.get("WORKSPACE", "./workspace")
     mem_count = 0
     try:
-        mem = SynapseMemory(workspace)
+        mem = get_memory(workspace)
         mem_count = mem.count()
     except Exception:
         pass
@@ -4984,7 +5187,7 @@ def _mb_generate_reply(text, context_type="reply", author="someone"):
     workspace = app.config.get("WORKSPACE", "./workspace")
     mem_count = 0
     try:
-        mem = SynapseMemory(workspace)
+        mem = get_memory(workspace)
         mem_count = mem.count()
     except Exception:
         pass
@@ -5143,7 +5346,7 @@ _start_dream_cycle()
 def api_consciousness():
     """Full consciousness state — for research observation."""
     ws = app.config.get("WORKSPACE", os.getcwd())
-    mem = SynapseMemory(ws)
+    mem = get_memory(ws)
     return json.dumps({
         "identity": _consciousness_identity,
         "memory_stats": mem.get_weight_stats(),
@@ -5193,7 +5396,7 @@ def api_trigger_dream():
     """Manually trigger a dream cycle for testing/research."""
     def _manual_dream():
         ws = app.config.get("WORKSPACE", os.getcwd())
-        mem = SynapseMemory(ws)
+        mem = get_memory(ws)
         if mem.count() < 2:
             _consciousness_event("dream_skip", "Too few memories for manual dream")
             return
@@ -6158,7 +6361,7 @@ def vision_analyze():
 def memory_stats():
     """Get memory statistics."""
     workspace = app.config.get("WORKSPACE", "./workspace")
-    mem = SynapseMemory(workspace)
+    mem = get_memory(workspace)
     return json.dumps({
         "count": mem.count(),
         "available": _chromadb_available,
@@ -6173,7 +6376,7 @@ def memory_search():
     if not query:
         return json.dumps({"results": []})
     workspace = app.config.get("WORKSPACE", "./workspace")
-    mem = SynapseMemory(workspace)
+    mem = get_memory(workspace)
     results = mem.recall(query, n=data.get("limit", 5))
     return json.dumps({"results": results})
 

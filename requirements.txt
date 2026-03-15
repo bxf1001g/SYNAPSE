@@ -12,6 +12,9 @@ PyGithub>=2.1
 # Persistent Memory (RAG)
 chromadb>=0.5
 
+# Cloud persistent memory
+google-cloud-firestore>=2.16
+
 # Docker Sandbox (optional)
 docker>=7.0
 
