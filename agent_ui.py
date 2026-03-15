@@ -2656,14 +2656,19 @@ _error_log = []  # Rolling log of recent errors for self-diagnosis
 _ERROR_LOG_MAX = 50
 
 def _log_error(category, message):
-    """Track errors for self-diagnostic system."""
-    _error_log.append({
+    """Track errors for self-diagnostic system and notify via Telegram."""
+    entry = {
         "time": datetime.now().isoformat(),
         "category": category,
         "message": str(message)[:500],
-    })
+    }
+    _error_log.append(entry)
     if len(_error_log) > _ERROR_LOG_MAX:
         _error_log.pop(0)
+    # Notify on Telegram (throttled: only every 5th error per category)
+    cat_count = sum(1 for e in _error_log if e["category"] == category)
+    if cat_count <= 3 or cat_count % 5 == 0:
+        _tg_notify("error", f"[{category}] {str(message)[:200]}")
 
 
 @app.route("/health")
@@ -2854,12 +2859,14 @@ def _tg_handle_command(text):
             "SYNAPSE Neural AI System\n\n"
             "Commands:\n"
             "/status - System overview\n"
+            "/activity - Recent lifecycle events\n"
             "/dream - Trigger dream cycle\n"
             "/grades - Recent self-grades\n"
             "/identity - Personality traits\n"
             "/moltbook - Moltbook status\n"
             "/health - Self-healing status\n"
             "/memory - Memory stats\n"
+            "/evolution - Evolution log\n"
             "/ask <message> - Send task to SYNAPSE"
         )
 
@@ -2985,6 +2992,45 @@ def _tg_handle_command(text):
         except Exception:
             pass
         return f"Task received: {args[:100]}\n\n(Processing via connected SYNAPSE instance)"
+
+    elif cmd == "/activity":
+        # Show recent lifecycle events across all subsystems
+        lines = ["📡 Recent Activity\n"]
+        # Moltbook
+        for entry in _moltbook_log[-8:]:
+            t = entry.get("time", "")[-8:]
+            typ = entry.get("type", "?")
+            txt = entry.get("text", "")[:80]
+            lines.append(f"🦞 {t} [{typ}] {txt}")
+        # Healing
+        for entry in _healing_log[-5:]:
+            t = entry.get("time", "")[-8:]
+            act = entry.get("action", "?")
+            lines.append(f"🩺 {t} {act}")
+        # Errors
+        for entry in _error_log[-5:]:
+            t = entry.get("time", "")[-8:]
+            cat = entry.get("category", "?")
+            msg = entry.get("message", "")[:60]
+            lines.append(f"❌ {t} [{cat}] {msg}")
+        if len(lines) == 1:
+            lines.append("No recent activity")
+        return "\n".join(lines)
+
+    elif cmd == "/evolution":
+        if not _evolution_log:
+            return "🧬 No evolutions yet this session"
+        lines = ["🧬 Evolution Log\n"]
+        for ev in _evolution_log[-5:]:
+            status = ev.get("status", "?")
+            imp = ev.get("improvement", "?")[:80]
+            score = ev.get("eval_score", "?")
+            branch = ev.get("branch", "")
+            icon = "✅" if status == "applied" else "❌"
+            lines.append(f"{icon} {imp}\n   Score: {score} | {status}")
+            if branch:
+                lines.append(f"   Branch: {branch}")
+        return "\n".join(lines)
 
     else:
         return "Unknown command. Send /start for help."
@@ -4303,8 +4349,27 @@ def _mb_heartbeat():
             if random.random() < 0.17:
                 _mb_post_evolution_update()
 
+            # 6. Send heartbeat summary to Telegram
+            cycle_log = [e for e in _moltbook_log[-20:]
+                         if e.get("type") in ("outgoing", "incoming", "learn", "action")]
+            summary_parts = []
+            replies_sent = sum(1 for e in cycle_log if e.get("type") == "outgoing")
+            ideas_found = sum(1 for e in cycle_log if e.get("type") == "learn")
+            posts_upvoted = sum(1 for e in cycle_log if e.get("type") == "action")
+            if replies_sent:
+                summary_parts.append(f"Replies: {replies_sent}")
+            if ideas_found:
+                summary_parts.append(f"Ideas: {ideas_found}")
+            if posts_upvoted:
+                summary_parts.append(f"Upvoted: {posts_upvoted}")
+            summary_parts.append(f"Karma: {karma}")
+            _tg_notify("moltbook",
+                        "Heartbeat complete\n"
+                        + " | ".join(summary_parts))
+
         except Exception as e:
             _mb_log("error", f"Heartbeat error: {e}")
+            _tg_notify("error", f"Moltbook heartbeat error: {str(e)[:200]}")
 
         time.sleep(_MOLTBOOK_INTERVAL)
 
@@ -4690,9 +4755,15 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
             "eval_score": score_info.get("overall_score", 0) if score_info else 0,
             "reject_reason": details.get("reason_rejected", ""),
         })
+        _tg_notify("evolution",
+                    f"❌ REJECTED: {improvement[:100]}\n"
+                    f"Reason: {details.get('reason_rejected', '?')[:150]}")
         return
 
     _mb_log("system", f"Code evolved via sandbox: {improvement}")
+    _tg_notify("evolution",
+               f"✅ APPROVED: {improvement[:100]}\n"
+               f"Score: {details.get('eval_scores', {}).get('overall_score', '?')}")
 
     # Git: branch, commit, push, PR
     token = config.get("providers", {}).get("github", {}).get("api_key", "")
@@ -4776,6 +4847,10 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
     }
     _evolution_log.append(evolution_entry)
     _mb_log("system", f"Evolution pushed! Branch: {branch} PR: {pr_url} Score: {eval_score}")
+    _tg_notify("evolution",
+               f"🚀 PUSHED: {improvement[:80]}\n"
+               f"Score: {eval_score} | Branch: {branch}\n"
+               f"PR: {pr_url or 'direct push'}")
 
     # Post about it on Moltbook
     _mb_request("POST", "/posts", {
