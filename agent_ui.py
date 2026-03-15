@@ -3407,19 +3407,29 @@ def api_telegram_status():
     return json.dumps({
         "active": _tg_active,
         "configured": bool(_TG_TOKEN and _TG_CHAT_ID),
-        "log": _tg_log[-10:],
+        "token_set": bool(_TG_TOKEN),
+        "chat_id_set": bool(_TG_CHAT_ID),
+        "log": _tg_log[-20:],
         "queue_size": len(_tg_event_queue),
     })
 
 
 @app.route("/api/telegram/connect", methods=["POST"])
 def api_telegram_connect():
-    global _TG_TOKEN, _TG_CHAT_ID
+    global _TG_TOKEN, _TG_CHAT_ID, _tg_active
     body = request.get_json(silent=True) or {}
-    if body.get("token"):
-        _TG_TOKEN = body["token"]
-    if body.get("chat_id"):
-        _TG_CHAT_ID = str(body["chat_id"])
+    token = body.get("token", "").strip()
+    chat_id = str(body.get("chat_id", "")).strip()
+    if not token or not chat_id:
+        return json.dumps({"status": "error", "message": "Both token and chat_id are required"}), 400
+    # Validate token with getMe before accepting
+    test = _tg_http("GET", f"https://api.telegram.org/bot{token}/getMe", timeout=10)
+    if test.get("status") != 200:
+        return json.dumps({"status": "error", "message": f"Invalid bot token: {test.get('error', 'API error')}"}), 400
+    _TG_TOKEN = token
+    _TG_CHAT_ID = chat_id
+    os.environ["TELEGRAM_BOT_TOKEN"] = token
+    os.environ["TELEGRAM_CHAT_ID"] = chat_id
     result = _start_telegram()
     return json.dumps(result)
 

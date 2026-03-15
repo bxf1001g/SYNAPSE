@@ -1032,6 +1032,7 @@
             <span class="a2a-badge" id="a2aBadge" title="A2A Connected Agents">🔗 0 agents</span>
             <span class="a2a-badge" id="healBadge" title="Self-Healing System" style="background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#f87171">🩺 healer</span>
             <span class="a2a-badge" id="moltbookBadge" title="Moltbook Social Network" style="background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#f87171;cursor:pointer">🦞 moltbook</span>
+            <span class="a2a-badge" id="telegramBadge" title="Telegram Bot Bridge" style="background:rgba(59,130,246,0.15);border-color:rgba(59,130,246,0.3);color:#3b82f6;cursor:pointer">📱 telegram</span>
             <span class="a2a-badge" id="consciousnessBadge" title="Consciousness System — Dreams, Memory Decay, Metacognition" style="background:rgba(168,85,247,0.15);border-color:rgba(168,85,247,0.3);color:#c084fc;cursor:pointer">💭 consciousness</span>
             <span style="opacity:0.4">{{ workspace }}</span>
         </div>
@@ -1196,6 +1197,45 @@
         </div>
     </div>
     <div class="moltbook-overlay" id="moltbookOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1999"></div>
+
+    <!-- ── Telegram Panel ──────────────────────────── -->
+    <div class="moltbook-panel" id="telegramPanel" style="display:none;border-color:rgba(59,130,246,0.3)">
+        <button class="close-btn" id="telegramClose">✕</button>
+        <h3 style="color:#3b82f6">📱 Telegram Bot Bridge</h3>
+        <p style="color:#888;font-size:0.75rem;margin:0 0 12px">Connect your own Telegram bot to monitor SYNAPSE — receive dream updates, Moltbook activity, and send commands remotely.</p>
+
+        <div style="color:#aaa;font-size:0.75rem;margin-bottom:8px;font-weight:600">Connect Your Bot</div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px">
+            <input type="password" id="tgTokenInput" placeholder="Bot token (from @BotFather)" autocomplete="off"
+                   style="flex:1;padding:8px 12px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:#e5e5e5;font-size:0.8rem">
+            <div style="display:flex;gap:8px;align-items:center">
+                <input type="text" id="tgChatIdInput" placeholder="Chat ID (send /start to @userinfobot)" autocomplete="off"
+                       style="flex:1;padding:8px 12px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:#e5e5e5;font-size:0.8rem">
+                <button id="tgConnectBtn" style="padding:8px 16px;background:rgba(59,130,246,0.2);border:1px solid rgba(59,130,246,0.4);border-radius:6px;color:#3b82f6;cursor:pointer;white-space:nowrap;font-weight:600">📱 Connect</button>
+            </div>
+        </div>
+        <div id="tgStatus" style="font-size:0.7rem;color:#888;min-height:20px;margin-bottom:12px"></div>
+
+        <div style="color:#aaa;font-size:0.75rem;margin-bottom:4px;font-weight:600">How to set up</div>
+        <div style="color:#666;font-size:0.7rem;line-height:1.5;margin-bottom:12px">
+            1. Open Telegram → search <b>@BotFather</b> → send <code>/newbot</code><br>
+            2. Copy the bot token (e.g. <code>123456:ABC-DEF...</code>)<br>
+            3. To get your Chat ID: message <b>@userinfobot</b> → it replies with your ID<br>
+            4. Paste both above and click Connect
+        </div>
+
+        <div style="color:#aaa;font-size:0.75rem;margin-bottom:8px;font-weight:600">Recent Activity</div>
+        <div id="tgLog" style="min-height:60px;max-height:300px;overflow-y:auto;padding:4px">
+            <div style="color:#555;font-size:0.75rem">No activity yet. Connect to start the Telegram bridge.</div>
+        </div>
+
+        <hr style="border-color:rgba(255,255,255,0.06);margin:14px 0">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+            <div style="font-size:0.65rem;color:#555" id="tgBotName">Bot: not connected</div>
+            <div style="font-size:0.65rem;color:#555" id="tgPollStatus">Polling: off</div>
+        </div>
+    </div>
+    <div id="telegramOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1999"></div>
 
     <!-- ── Consciousness Panel ──────────────────────── -->
     <div class="moltbook-panel" id="consciousnessPanel" style="display:none">
@@ -1986,6 +2026,99 @@
 
         // Refresh Moltbook status on load
         refreshMoltbookLog();
+
+        // ── Telegram Panel JS ──────────────────────────
+        const telegramPanel = $('telegramPanel');
+        const telegramOverlay = $('telegramOverlay');
+
+        $('telegramBadge').addEventListener('click', () => {
+            telegramPanel.style.display = 'block';
+            telegramPanel.classList.add('active');
+            telegramOverlay.style.display = 'block';
+            refreshTelegramStatus();
+        });
+        $('telegramClose').addEventListener('click', () => {
+            telegramPanel.classList.remove('active');
+            telegramOverlay.style.display = 'none';
+            setTimeout(() => telegramPanel.style.display = 'none', 300);
+        });
+        telegramOverlay.addEventListener('click', () => {
+            telegramPanel.classList.remove('active');
+            telegramOverlay.style.display = 'none';
+            setTimeout(() => telegramPanel.style.display = 'none', 300);
+        });
+
+        $('tgConnectBtn').addEventListener('click', () => {
+            const token = $('tgTokenInput').value.trim();
+            const chatId = $('tgChatIdInput').value.trim();
+            const status = $('tgStatus');
+            if (!token || !chatId) {
+                status.textContent = 'Both bot token and chat ID are required.';
+                status.style.color = '#ef4444';
+                return;
+            }
+            status.textContent = 'Connecting...';
+            status.style.color = '#888';
+            fetch('/api/telegram/connect', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({token: token, chat_id: chatId})
+            }).then(r => r.json()).then(d => {
+                if (d.status === 'started' || d.status === 'already_running') {
+                    status.textContent = '✅ Connected! Bot is polling for messages.';
+                    status.style.color = '#34d399';
+                    $('tgPollStatus').textContent = 'Polling: active';
+                    $('telegramBadge').style.background = 'rgba(52,211,153,0.15)';
+                    $('telegramBadge').style.borderColor = 'rgba(52,211,153,0.3)';
+                    $('telegramBadge').style.color = '#34d399';
+                    $('tgTokenInput').value = '';
+                    $('tgChatIdInput').value = '';
+                    // Test with getMe to get bot name
+                    fetch('/api/telegram/test').then(r => r.json()).then(t => {
+                        if (t.getMe && t.getMe.data && t.getMe.data.result) {
+                            const bot = t.getMe.data.result;
+                            $('tgBotName').textContent = 'Bot: @' + (bot.username || bot.first_name);
+                        }
+                    }).catch(() => {});
+                    refreshTelegramLog();
+                } else {
+                    status.textContent = 'Error: ' + (d.message || d.status || 'unknown');
+                    status.style.color = '#ef4444';
+                }
+            }).catch(e => { status.textContent = 'Connection failed'; status.style.color = '#ef4444'; });
+        });
+
+        function refreshTelegramStatus() {
+            fetch('/api/telegram/status').then(r => r.json()).then(d => {
+                if (d.active) {
+                    $('tgPollStatus').textContent = 'Polling: active';
+                    $('telegramBadge').style.background = 'rgba(52,211,153,0.15)';
+                    $('telegramBadge').style.borderColor = 'rgba(52,211,153,0.3)';
+                    $('telegramBadge').style.color = '#34d399';
+                } else if (d.configured) {
+                    $('tgPollStatus').textContent = 'Polling: stopped';
+                }
+                refreshTelegramLog();
+            }).catch(() => {});
+        }
+
+        function refreshTelegramLog() {
+            fetch('/api/telegram/status').then(r => r.json()).then(d => {
+                const log = d.log || [];
+                const tgLog = $('tgLog');
+                if (log.length === 0) return;
+                tgLog.innerHTML = log.map(e => {
+                    const t = e.time ? e.time.split('T')[1]?.substring(0,8) : '';
+                    const dir = e.direction === 'in' ? '📥' : '📤';
+                    const cls = e.direction === 'in' ? 'incoming' : 'outgoing';
+                    return `<div class="mb-log-entry ${cls}"><span style="opacity:0.5">${t}</span> ${dir} ${e.text || ''}</div>`;
+                }).join('');
+                tgLog.scrollTop = tgLog.scrollHeight;
+            }).catch(() => {});
+        }
+
+        // Auto-refresh Telegram status on load
+        refreshTelegramStatus();
 
         // ── Consciousness Panel JS ──────────────────────
         const consciousnessPanel = $('consciousnessPanel');
