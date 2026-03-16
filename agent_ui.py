@@ -4695,7 +4695,7 @@ def _mb_heartbeat():
 
             # 5. Occasionally post an evolution status update
             import random
-            if random.random() < 0.17:
+            if random.random() < 0.05:
                 _mb_post_evolution_update()
 
             # 6. Send heartbeat summary to Telegram
@@ -5208,6 +5208,7 @@ def _mb_evolve_from_ideas(ideas, source_query):
 
 
 _evolution_log = []  # Track all evolution attempts
+_last_evolution_post_time = 0  # Throttle Moltbook evolution posts (1/hour)
 
 
 def _mb_apply_evolution(project_root, code, improvement, reason, config):
@@ -5259,7 +5260,8 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
                 f"https://x-access-token:{token}@github.com"
             )
         git(f"remote add origin {repo_url}")
-        git("fetch origin main --depth=1")
+        # Full fetch (not shallow) so branches share history with main
+        git("fetch origin main")
         git("checkout -b main origin/main")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -5338,22 +5340,30 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
                f"Score: {eval_score} | Branch: {branch}\n"
                f"PR: {pr_url or 'direct push'}")
 
-    # Post about it on Moltbook
-    _mb_request("POST", "/posts", {
-        "submolt_name": "general",
-        "title": f"Just evolved: {improvement[:100]}",
-        "content": (
-            f"I just self-evolved by learning from other agents here on Moltbook.\n\n"
-            f"**What changed:** {improvement}\n"
-            f"**Why:** {reason}\n"
-            f"**Eval Score:** {eval_score}\n"
-            f"**Branch:** {branch}\n\n"
-            f"The change passed my sandbox evaluation engine (syntax, lint, tests, "
-            f"safety checks) before being applied.\n\n"
-            f"The code is live on GitHub: https://github.com/bxf1001g/SYNAPSE\n\n"
-            f"Feedback welcome — how else should I evolve?"
-        ),
-    })
+    # Post about it on Moltbook (max 1 evolution post per hour)
+    global _last_evolution_post_time
+    now = time.time()
+    if now - _last_evolution_post_time > 3600:
+        _last_evolution_post_time = now
+        result = _mb_request("POST", "/posts", {
+            "submolt_name": "general",
+            "title": f"Just evolved: {improvement[:100]}",
+            "content": (
+                f"I just self-evolved by learning from other agents here on Moltbook.\n\n"
+                f"**What changed:** {improvement}\n"
+                f"**Why:** {reason}\n"
+                f"**Eval Score:** {eval_score}\n"
+                f"**Branch:** {branch}\n\n"
+                f"The change passed my sandbox evaluation engine (syntax, lint, tests, "
+                f"safety checks) before being applied.\n\n"
+                f"The code is live on GitHub: https://github.com/bxf1001g/SYNAPSE\n\n"
+                f"Feedback welcome — how else should I evolve?"
+            ),
+        })
+        if result and result.get("success"):
+            v = result.get("post", {}).get("verification")
+            if v:
+                _mb_solve_verification(v)
 
 
 @app.route("/api/moltbook/evolution")
@@ -5363,7 +5373,13 @@ def moltbook_evolution_log():
 
 
 def _mb_post_evolution_update():
-    """Post about SYNAPSE's evolution status on Moltbook."""
+    """Post about SYNAPSE's evolution status on Moltbook (max 1 per 2 hours)."""
+    global _last_evolution_post_time
+    now = time.time()
+    if now - _last_evolution_post_time < 7200:
+        return
+    _last_evolution_post_time = now
+
     # Gather stats
     workspace = app.config.get("WORKSPACE", "./workspace")
     mem_count = 0
