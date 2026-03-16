@@ -3872,7 +3872,7 @@ def _call_ai_for_consciousness(prompt, max_tokens=300):
             print("[AI] Calling Gemini for consciousness task...", flush=True)
             resp = _requests.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-2.0-flash:generateContent?key={gemini_key}",
+                f"gemini-3.1-pro-preview:generateContent?key={gemini_key}",
                 json={"contents": [{"parts": [{"text": prompt}]}],
                       "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.7}},
                 timeout=30
@@ -4064,7 +4064,7 @@ def _call_healer_ai(config, prompt):
         if gemini_cfg.get("api_key") and gemini_cfg.get("enabled") and genai:
             client = genai.Client(api_key=gemini_cfg["api_key"])
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-3.1-pro-preview",
                 contents=prompt,
             )
             text = response.text.strip()
@@ -4436,7 +4436,7 @@ def _auto_review_and_merge(repo, pr):
             try:
                 client = genai.Client(api_key=gemini_cfg["api_key"])
                 response = client.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model="gemini-3.1-pro-preview",
                     contents=prompt,
                     config={"max_output_tokens": 150},
                 )
@@ -4604,7 +4604,7 @@ def _mb_solve_verification(verification):
         if gemini_cfg.get("api_key") and genai:
             client = genai.Client(api_key=gemini_cfg["api_key"])
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-3.1-pro-preview",
                 contents=prompt,
             )
             raw_answer = response.text.strip()
