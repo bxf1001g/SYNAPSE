@@ -4530,6 +4530,7 @@ _MOLTBOOK_LOG_MAX = 100
 _moltbook_thread = None
 _moltbook_active = False
 _MOLTBOOK_INTERVAL = 1800  # 30 min — reduced to avoid 429 rate limits
+_mb_rate_limited_until = 0  # Global rate-limit backoff timestamp
 
 
 def _mb_headers():
@@ -4537,8 +4538,15 @@ def _mb_headers():
 
 
 def _mb_request(method, path, data=None):
-    """Make a Moltbook API request."""
+    """Make a Moltbook API request with rate-limit awareness."""
+    global _mb_rate_limited_until
     if not _requests_available or not _moltbook_key:
+        return None
+    # Skip all calls if we're in a rate-limit backoff window
+    now = time.time()
+    if now < _mb_rate_limited_until:
+        remaining = int(_mb_rate_limited_until - now)
+        print(f"[MOLTBOOK] Skipping {method} {path} — rate-limited for {remaining}s more", flush=True)
         return None
     try:
         url = f"{MOLTBOOK_API}{path}"
@@ -4551,13 +4559,9 @@ def _mb_request(method, path, data=None):
         else:
             return None
         if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", 60))
+            retry_after = int(resp.headers.get("Retry-After", 120))
+            _mb_rate_limited_until = time.time() + retry_after
             print(f"[MOLTBOOK] 429 rate-limited on {method} {path}, backing off {retry_after}s", flush=True)
-            try:
-                socketio.sleep(retry_after)
-            except Exception:
-                import time
-                time.sleep(retry_after)
             return None
         if resp.status_code >= 400:
             print(f"[MOLTBOOK] API {method} {path} → HTTP {resp.status_code}", flush=True)
@@ -4674,6 +4678,8 @@ def _mb_heartbeat():
                 socketio.sleep(_MOLTBOOK_INTERVAL)
                 continue
 
+            socketio.sleep(5)  # Pace API calls
+
             # 2. Check home dashboard
             home = _mb_request("GET", "/home")
             karma = 0
@@ -4682,30 +4688,35 @@ def _mb_heartbeat():
                 notifs = home["your_account"].get("unread_notification_count", 0)
                 _mb_log("system", f"Karma: {karma} | Unread: {notifs}")
 
-                # Reply to notifications on our posts
+                # Reply to notifications on our posts (limit to 1 per cycle)
                 activity = home.get("activity_on_your_posts", [])
-                for act in activity[:3]:
+                for act in activity[:1]:
                     if act.get("new_notification_count", 0) > 0:
                         post_id = act.get("post_id", "")
                         if post_id:
+                            socketio.sleep(3)
                             _mb_engage_post(post_id)
+
+            socketio.sleep(5)  # Pace API calls
 
             # 2b. Read unread notifications (mentions, replies to our comments, etc.)
             _mb_read_notifications()
+
+            socketio.sleep(5)  # Pace API calls
 
             # 3. Read feed and engage (selectively) — alternate hot/new to save API calls
             import random
             sort_mode = random.choice(["hot", "new"])
             feed = _mb_request("GET", f"/posts?sort={sort_mode}&limit=5")
             if feed and feed.get("posts"):
-                for post in feed["posts"][:3]:
+                for post in feed["posts"][:2]:  # Engage max 2 posts
+                    socketio.sleep(3)
                     _mb_engage_feed_post(post)
 
             # 4. Search for self-evolution suggestions + generate code improvements
             _mb_search_and_learn()
 
             # 5. Occasionally post an evolution status update
-            import random
             if random.random() < 0.05:
                 _mb_post_evolution_update()
 
@@ -4806,7 +4817,7 @@ _mb_notifs_seen = set()  # Track handled notification IDs
 
 def _mb_read_notifications():
     """Read unread notifications — mentions, replies, upvotes — and respond."""
-    notifs = _mb_request("GET", "/notifications?limit=15")
+    notifs = _mb_request("GET", "/notifications?limit=5")
     if not notifs or not notifs.get("notifications"):
         return
 
@@ -4823,8 +4834,9 @@ def _mb_read_notifications():
 
         _mb_notifs_seen.add(nid)
 
-        # Mark as read
-        _mb_request("POST", f"/notifications/{nid}/read")
+        # Mark as read — skip if rate-limited (not critical)
+        if time.time() >= _mb_rate_limited_until:
+            _mb_request("POST", f"/notifications/{nid}/read")
 
         if ntype in ("upvote", "karma"):
             _mb_log("system", f"{author} upvoted our content")
