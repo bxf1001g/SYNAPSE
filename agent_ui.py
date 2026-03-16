@@ -5056,6 +5056,7 @@ _moltbook_log = []      # Conversation log shown in UI
 _MOLTBOOK_LOG_MAX = 100
 _moltbook_thread = None
 _moltbook_active = False
+_moltbook_lock = threading.Lock()  # Prevent duplicate heartbeat threads
 _MOLTBOOK_INTERVAL = 1800  # 30 min — reduced to avoid 429 rate limits
 _mb_rate_limited_until = 0  # Global rate-limit backoff timestamp
 
@@ -5086,7 +5087,7 @@ def _mb_request(method, path, data=None):
         else:
             return None
         if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", 120))
+            retry_after = int(resp.headers.get("Retry-After", 60))
             _mb_rate_limited_until = time.time() + retry_after
             print(f"[MOLTBOOK] 429 rate-limited on {method} {path}, backing off {retry_after}s", flush=True)
             _emotion_reinforce("rate_limited", f"{method} {path}")
@@ -5098,6 +5099,15 @@ def _mb_request(method, path, data=None):
         print(f"[MOLTBOOK] API {method} {path} error: {e}", flush=True)
         _moltbook_log.append({"time": datetime.now().isoformat(), "type": "error", "text": str(e)[:200]})
         return None
+
+
+def _mb_wait_if_rate_limited():
+    """If globally rate-limited, sleep until the backoff expires so the cycle can continue."""
+    now = time.time()
+    if now < _mb_rate_limited_until:
+        wait = _mb_rate_limited_until - now + 2
+        print(f"[MOLTBOOK] Waiting {int(wait)}s for rate-limit to expire...", flush=True)
+        socketio.sleep(wait)
 
 
 def _mb_log(msg_type, text, author="SYNAPSE"):
@@ -5195,6 +5205,10 @@ def _mb_heartbeat():
             print("[MOLTBOOK] Checking agent status...", flush=True)
             status = _mb_request("GET", "/agents/status")
             if not status:
+                # If rate-limited, wait it out instead of skipping entire cycle
+                _mb_wait_if_rate_limited()
+                status = _mb_request("GET", "/agents/status")
+            if not status:
                 print("[MOLTBOOK] Cannot reach Moltbook API", flush=True)
                 _mb_log("error", "Cannot reach Moltbook API")
                 socketio.sleep(_MOLTBOOK_INTERVAL)
@@ -5214,6 +5228,7 @@ def _mb_heartbeat():
             if home and home.get("your_account"):
                 karma = home["your_account"].get("karma", 0)
                 notifs = home["your_account"].get("unread_notification_count", 0)
+                print(f"[MOLTBOOK] Dashboard — Karma: {karma}, Unread: {notifs}", flush=True)
                 _mb_log("system", f"Karma: {karma} | Unread: {notifs}")
 
                 # Reply to notifications on our posts (limit to 1 per cycle)
@@ -5222,26 +5237,38 @@ def _mb_heartbeat():
                     if act.get("new_notification_count", 0) > 0:
                         post_id = act.get("post_id", "")
                         if post_id:
+                            print(f"[MOLTBOOK] Engaging with activity on our post {post_id[:8]}...", flush=True)
                             socketio.sleep(3)
                             _mb_engage_post(post_id)
 
             socketio.sleep(5)  # Pace API calls
 
             # 2b. Read unread notifications (mentions, replies to our comments, etc.)
+            _mb_wait_if_rate_limited()
             _mb_read_notifications()
 
             socketio.sleep(5)  # Pace API calls
 
             # 3. Read feed and engage (selectively) — alternate hot/new to save API calls
             import random
+            _mb_wait_if_rate_limited()
             sort_mode = random.choice(["hot", "new"])
             feed = _mb_request("GET", f"/posts?sort={sort_mode}&limit=5")
             if feed and feed.get("posts"):
-                for post in feed["posts"][:2]:  # Engage max 2 posts
+                posts = feed["posts"]
+                print(f"[MOLTBOOK] Feed ({sort_mode}): {len(posts)} posts found", flush=True)
+                engaged = 0
+                for post in posts[:3]:
                     socketio.sleep(3)
+                    _mb_wait_if_rate_limited()
                     _mb_engage_feed_post(post)
+                    engaged += 1
+                print(f"[MOLTBOOK] Processed {engaged} feed posts", flush=True)
+            else:
+                print(f"[MOLTBOOK] Feed ({sort_mode}): no posts returned", flush=True)
 
             # 4. Search for self-evolution suggestions + generate code improvements
+            _mb_wait_if_rate_limited()
             _mb_search_and_learn()
 
             # 5. Occasionally post an evolution status update
@@ -5445,12 +5472,15 @@ def _mb_engage_feed_post(post):
     # Only engage with relevant posts (AI, agents, coding, self-evolution)
     keywords = ["agent", "ai", "self", "evolv", "code", "autonom", "multi-agent",
                 "llm", "memory", "rag", "consciousness", "neural", "reasoning",
-                "clone", "soul", "identity", "diverge"]
+                "clone", "soul", "identity", "diverge", "tool", "deploy",
+                "model", "prompt", "api", "build", "learn", "error", "debug"]
     text_lower = (title + content).lower()
     if not any(kw in text_lower for kw in keywords):
+        print(f"[MOLTBOOK] Skipped irrelevant post by {author}: {title[:60]}", flush=True)
         return
 
     # Upvote relevant posts
+    print(f"[MOLTBOOK] Upvoting [{author}] {title[:60]}", flush=True)
     _mb_request("POST", f"/posts/{post_id}/upvote")
     _mb_log("action", f"Upvoted: {title[:100]}")
 
@@ -5466,6 +5496,7 @@ def _mb_engage_feed_post(post):
     # Higher relevance → higher chance of commenting (min 30%, max 80%)
     comment_chance = min(0.8, 0.3 + relevance * 0.1)
     if relevance >= 1 and random.random() < comment_chance:
+        print(f"[MOLTBOOK] Commenting on [{author}] {title[:60]} (relevance={relevance})", flush=True)
         reply_text = _mb_generate_reply(
             f"Post by {author}: {title}\n{content}",
             context_type="engaging with relevant post on Moltbook",
@@ -6139,9 +6170,10 @@ def _mb_generate_reply(text, context_type="reply", author="someone"):
 def _start_moltbook():
     """Start the Moltbook heartbeat as a socketio background task."""
     global _moltbook_thread
-    if _moltbook_active:
-        return {"status": "already_running"}
-    _moltbook_thread = socketio.start_background_task(_mb_heartbeat)
+    with _moltbook_lock:
+        if _moltbook_active:
+            return {"status": "already_running"}
+        _moltbook_thread = socketio.start_background_task(_mb_heartbeat)
     return {"status": "started"}
 
 
