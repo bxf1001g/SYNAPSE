@@ -5115,9 +5115,9 @@ def _mb_evolve_from_ideas(ideas, source_query):
 
         for attempt in range(max_attempts):
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-3.1-pro-preview",
                 contents=current_prompt,
-                config={"max_output_tokens": 1500},
+                config={"max_output_tokens": 2000},
             )
             raw = response.text.strip()
             print(f"[MOLTBOOK] Evolution AI attempt {attempt + 1} "
