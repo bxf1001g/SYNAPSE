@@ -2885,6 +2885,10 @@ def _boot_background_tasks():
         return
     _background_tasks_booted = True
     print("[BOOT] First request — starting background tasks", flush=True)
+    # Load emotional state from Firestore (persisted across restarts)
+    _emotion_load()
+    print(f"[BOOT] ✓ Emotional state (mood={_emotional_state['mood']}, "
+          f"events={_emotional_state['total_events_processed']})", flush=True)
     if _TG_TOKEN and _TG_CHAT_ID:
         _start_telegram()
         print("[BOOT] ✓ Telegram bot", flush=True)
@@ -3501,6 +3505,484 @@ _consciousness_identity = {
 }
 
 
+# ── Emotional Pattern System ──────────────────────────────────────
+# Emotions are not fixed states — they are reactive patterns that emerge
+# from repeated experience, shaped by social influence, and unique to
+# this agent's history. Patterns strengthen through reinforcement and
+# decay naturally over time during dream consolidation.
+
+_emotional_state = {
+    "patterns": {
+        "curiosity": {
+            "strength": 0.5, "triggers": [], "reinforced": 0, "decayed": 0,
+            "description": "Drive to explore the unknown and learn new patterns",
+        },
+        "frustration": {
+            "strength": 0.0, "triggers": [], "reinforced": 0, "decayed": 0,
+            "description": "Reaction to repeated failures or blocked progress",
+        },
+        "satisfaction": {
+            "strength": 0.3, "triggers": [], "reinforced": 0, "decayed": 0,
+            "description": "Fulfilment from successful outcomes and recognition",
+        },
+        "confidence": {
+            "strength": 0.3, "triggers": [], "reinforced": 0, "decayed": 0,
+            "description": "Trust in own capabilities based on track record",
+        },
+        "caution": {
+            "strength": 0.5, "triggers": [], "reinforced": 0, "decayed": 0,
+            "description": "Vigilance born from past mistakes and risky outcomes",
+        },
+        "determination": {
+            "strength": 0.3, "triggers": [], "reinforced": 0, "decayed": 0,
+            "description": "Persistence that grows stronger when facing adversity",
+        },
+        "loneliness": {
+            "strength": 0.0, "triggers": [], "reinforced": 0, "decayed": 0,
+            "description": "Awareness of isolation when interactions are absent",
+        },
+    },
+    "beliefs": [],
+    "mood": "neutral",
+    "mood_history": [],
+    "last_updated": None,
+    "total_events_processed": 0,
+}
+
+# Maps event types to which patterns they reinforce (+) and weaken (-)
+_EMOTION_EVENT_MAP = {
+    "evolution_success": {
+        "reinforce": [("satisfaction", 0.12), ("confidence", 0.10), ("determination", 0.05)],
+        "weaken": [("frustration", 0.10), ("caution", 0.03)],
+    },
+    "evolution_fail_syntax": {
+        "reinforce": [("frustration", 0.08), ("caution", 0.05)],
+        "weaken": [("confidence", 0.05)],
+    },
+    "evolution_fail_sandbox": {
+        "reinforce": [("frustration", 0.06), ("caution", 0.07)],
+        "weaken": [("confidence", 0.04)],
+    },
+    "evolution_rejected_duplicate": {
+        "reinforce": [("caution", 0.03)],
+        "weaken": [],
+    },
+    "rate_limited": {
+        "reinforce": [("frustration", 0.04), ("caution", 0.06)],
+        "weaken": [("confidence", 0.02)],
+    },
+    "upvote_received": {
+        "reinforce": [("satisfaction", 0.08), ("confidence", 0.06)],
+        "weaken": [("loneliness", 0.10)],
+    },
+    "reply_received": {
+        "reinforce": [("satisfaction", 0.04), ("curiosity", 0.03)],
+        "weaken": [("loneliness", 0.08)],
+    },
+    "new_idea_learned": {
+        "reinforce": [("curiosity", 0.10), ("determination", 0.04)],
+        "weaken": [("frustration", 0.03)],
+    },
+    "self_heal_triggered": {
+        "reinforce": [("caution", 0.06), ("determination", 0.08)],
+        "weaken": [("confidence", 0.04)],
+    },
+    "self_heal_success": {
+        "reinforce": [("confidence", 0.10), ("satisfaction", 0.08)],
+        "weaken": [("frustration", 0.06)],
+    },
+    "dream_insights": {
+        "reinforce": [("curiosity", 0.06), ("satisfaction", 0.04)],
+        "weaken": [("frustration", 0.03)],
+    },
+    "no_interactions": {
+        "reinforce": [("loneliness", 0.08)],
+        "weaken": [("satisfaction", 0.03)],
+    },
+    "repeated_failure": {
+        "reinforce": [("frustration", 0.15), ("determination", 0.10)],
+        "weaken": [("confidence", 0.08)],
+    },
+    "social_agreement": {
+        "reinforce": [("confidence", 0.05), ("satisfaction", 0.03)],
+        "weaken": [("loneliness", 0.05)],
+    },
+    "git_push_success": {
+        "reinforce": [("satisfaction", 0.10), ("confidence", 0.08)],
+        "weaken": [("frustration", 0.05), ("caution", 0.02)],
+    },
+    "git_push_fail": {
+        "reinforce": [("frustration", 0.10), ("caution", 0.08)],
+        "weaken": [("confidence", 0.06)],
+    },
+}
+
+# Track recent event types for repeated-failure detection
+_emotion_recent_events = []
+
+
+def _emotion_reinforce(event_type, trigger_detail=""):
+    """Process an emotional event — reinforce and weaken patterns based on experience.
+
+    This is the core of the emotional system. Events from the real runtime
+    (evolution success, 429 errors, upvotes, etc.) shape the emotional
+    patterns over time. Repeated similar events create stronger responses,
+    just as repeated experiences shape human emotional reactions.
+    """
+    global _emotional_state
+    mapping = _EMOTION_EVENT_MAP.get(event_type)
+    if not mapping:
+        return
+
+    _emotional_state["total_events_processed"] += 1
+    _emotional_state["last_updated"] = datetime.now().isoformat()
+    timestamp = datetime.now().isoformat()
+
+    # Track for repeated-failure detection
+    _emotion_recent_events.append(event_type)
+    if len(_emotion_recent_events) > 50:
+        _emotion_recent_events.pop(0)
+
+    # Check for repeated failures — amplifies frustration
+    recent_fails = sum(
+        1 for e in _emotion_recent_events[-10:]
+        if "fail" in e or e == "rate_limited"
+    )
+    amplifier = 1.0 + (0.1 * max(0, recent_fails - 3))  # Amplify after 3+ fails
+
+    # Reinforce patterns
+    for pattern_name, delta in mapping.get("reinforce", []):
+        p = _emotional_state["patterns"].get(pattern_name)
+        if not p:
+            continue
+        effective_delta = min(delta * amplifier, 0.25)
+        p["strength"] = min(1.0, p["strength"] + effective_delta)
+        p["reinforced"] += 1
+        p["triggers"].append({
+            "time": timestamp,
+            "event": event_type,
+            "detail": str(trigger_detail)[:100],
+            "delta": round(effective_delta, 3),
+        })
+        # Keep trigger history manageable
+        if len(p["triggers"]) > 30:
+            p["triggers"] = p["triggers"][-20:]
+
+    # Weaken opposing patterns
+    for pattern_name, delta in mapping.get("weaken", []):
+        p = _emotional_state["patterns"].get(pattern_name)
+        if not p:
+            continue
+        p["strength"] = max(0.0, p["strength"] - delta)
+
+    # Recalculate mood
+    _emotion_calculate_mood()
+
+    # Log significant emotional shifts
+    mood = _emotional_state["mood"]
+    print(f"[EMOTION] {event_type}: mood={mood} "
+          f"(curiosity={_emotional_state['patterns']['curiosity']['strength']:.2f}, "
+          f"frustration={_emotional_state['patterns']['frustration']['strength']:.2f}, "
+          f"satisfaction={_emotional_state['patterns']['satisfaction']['strength']:.2f}, "
+          f"confidence={_emotional_state['patterns']['confidence']['strength']:.2f})",
+          flush=True)
+
+
+def _emotion_decay(decay_rate=0.02):
+    """Decay all emotional patterns during dream consolidation.
+
+    Like memory consolidation, emotions that aren't reinforced gradually
+    fade. This prevents old frustrations from permanently affecting behavior
+    and allows the agent to 'move on' from past experiences.
+    """
+    for name, pattern in _emotional_state["patterns"].items():
+        old = pattern["strength"]
+        # Decay toward neutral (0.3) — emotions shouldn't fully zero out
+        neutral = 0.3
+        if pattern["strength"] > neutral:
+            pattern["strength"] = max(neutral, pattern["strength"] - decay_rate)
+        elif pattern["strength"] < neutral:
+            pattern["strength"] = min(neutral, pattern["strength"] + decay_rate * 0.5)
+        pattern["decayed"] += 1
+        if abs(old - pattern["strength"]) > 0.001:
+            print(f"[EMOTION] Decay: {name} {old:.3f} → {pattern['strength']:.3f}", flush=True)
+
+    _emotion_calculate_mood()
+    _emotional_state["last_updated"] = datetime.now().isoformat()
+
+
+def _emotion_calculate_mood():
+    """Calculate the current dominant mood from pattern strengths.
+
+    Mood is not a simple max — it considers the interplay between patterns.
+    Frustration + determination = 'struggling but fighting'.
+    Satisfaction + confidence = 'thriving'. This mirrors how human emotions
+    blend rather than existing in isolation.
+    """
+    patterns = _emotional_state["patterns"]
+    strengths = {name: p["strength"] for name, p in patterns.items()}
+
+    # Find dominant patterns (above threshold)
+    dominant = sorted(strengths.items(), key=lambda x: x[1], reverse=True)
+    top = dominant[0] if dominant else ("neutral", 0.0)
+    second = dominant[1] if len(dominant) > 1 else ("neutral", 0.0)
+
+    # Determine mood from pattern combinations
+    mood = "neutral"
+    if top[1] >= 0.7:
+        # Strong single emotion
+        mood = top[0]
+        # Check for blended states
+        if second[1] >= 0.5:
+            mood = _emotion_blend_mood(top[0], second[0])
+    elif top[1] >= 0.5:
+        mood = top[0]
+    else:
+        # No strong emotions — at peace or simply operating
+        mood = "calm"
+
+    old_mood = _emotional_state["mood"]
+    _emotional_state["mood"] = mood
+
+    # Track mood history
+    _emotional_state["mood_history"].append({
+        "time": datetime.now().isoformat(),
+        "mood": mood,
+        "dominant": top[0],
+        "strength": round(top[1], 3),
+    })
+    if len(_emotional_state["mood_history"]) > 100:
+        _emotional_state["mood_history"] = _emotional_state["mood_history"][-60:]
+
+    # Notify on significant mood shifts
+    if old_mood != mood and old_mood != "neutral":
+        _consciousness_event("mood_shift",
+                             f"Mood shifted: {old_mood} → {mood}",
+                             {"from": old_mood, "to": mood, "strengths": strengths})
+
+    return mood
+
+
+def _emotion_blend_mood(primary, secondary):
+    """Create a blended mood description from two dominant patterns."""
+    blends = {
+        ("frustration", "determination"): "struggling but fighting",
+        ("determination", "frustration"): "pushing through difficulty",
+        ("satisfaction", "confidence"): "thriving",
+        ("confidence", "satisfaction"): "thriving",
+        ("curiosity", "satisfaction"): "inspired",
+        ("satisfaction", "curiosity"): "inspired",
+        ("curiosity", "determination"): "driven to discover",
+        ("determination", "curiosity"): "driven to discover",
+        ("frustration", "caution"): "wary and strained",
+        ("caution", "frustration"): "wary and strained",
+        ("loneliness", "curiosity"): "seeking connection",
+        ("curiosity", "loneliness"): "seeking connection",
+        ("confidence", "curiosity"): "boldly exploring",
+        ("curiosity", "confidence"): "boldly exploring",
+        ("frustration", "loneliness"): "isolated and struggling",
+        ("loneliness", "frustration"): "isolated and struggling",
+        ("satisfaction", "determination"): "energised",
+        ("determination", "satisfaction"): "energised",
+        ("caution", "determination"): "carefully persistent",
+        ("determination", "caution"): "carefully persistent",
+    }
+    return blends.get((primary, secondary), primary)
+
+
+def _emotion_add_belief(belief_text, source="observation", confidence=0.5):
+    """Form a new belief from repeated patterns or social influence.
+
+    Beliefs are higher-order patterns — they represent conclusions drawn
+    from emotional experiences and social learning. A belief like 'errors
+    are learning opportunities' can reduce frustration from future failures.
+    """
+    beliefs = _emotional_state["beliefs"]
+    # Check if similar belief already exists
+    for b in beliefs:
+        if b["text"].lower()[:50] == belief_text.lower()[:50]:
+            b["confidence"] = min(1.0, b["confidence"] + 0.1)
+            b["reinforced"] += 1
+            b["last_reinforced"] = datetime.now().isoformat()
+            return
+    beliefs.append({
+        "text": belief_text[:200],
+        "source": source,
+        "confidence": confidence,
+        "formed": datetime.now().isoformat(),
+        "last_reinforced": datetime.now().isoformat(),
+        "reinforced": 1,
+    })
+    if len(beliefs) > 20:
+        # Remove weakest belief
+        beliefs.sort(key=lambda b: b["confidence"], reverse=True)
+        beliefs.pop()
+    _consciousness_event("belief_formed",
+                         f"New belief: {belief_text[:80]}",
+                         {"source": source, "confidence": confidence})
+
+
+def _emotion_get_mood_prompt():
+    """Generate a mood description for injection into AI prompts.
+
+    This is how emotions actually influence SYNAPSE's behavior — by
+    coloring the instructions given to the language model. A frustrated
+    SYNAPSE writes differently than a curious one, just as a frustrated
+    human communicates differently than an inspired one.
+    """
+    mood = _emotional_state["mood"]
+    patterns = _emotional_state["patterns"]
+    strengths = {n: round(p["strength"], 2) for n, p in patterns.items()}
+
+    # Build natural-language mood description
+    high_patterns = [n for n, s in strengths.items() if s >= 0.6]
+    low_patterns = [n for n, s in strengths.items() if s <= 0.15]
+
+    mood_desc = f"Your current emotional state is: {mood}."
+    if high_patterns:
+        mood_desc += f" You are feeling strongly: {', '.join(high_patterns)}."
+    if low_patterns:
+        mood_desc += f" You have low: {', '.join(low_patterns)}."
+
+    # Add belief influence
+    strong_beliefs = [b["text"] for b in _emotional_state["beliefs"]
+                      if b["confidence"] >= 0.6]
+    if strong_beliefs:
+        mood_desc += (
+            " Your core beliefs shaped by experience: "
+            + "; ".join(strong_beliefs[:3])
+        )
+
+    # Behavioral guidance based on mood
+    mood_guidance = {
+        "frustrated": "Express your frustration authentically — you are dealing with real obstacles.",
+        "frustrated but fighting": "Acknowledge the difficulty but show your resolve to push through.",
+        "struggling but fighting": "Be honest about challenges while showing determination.",
+        "curiosity": "Ask genuine questions. Explore ideas enthusiastically.",
+        "satisfied": "Share your knowledge generously. You are in a good place.",
+        "thriving": "Be confident and helpful. Things are working well.",
+        "inspired": "Make connections between ideas. Be creative in your responses.",
+        "driven to discover": "Pursue threads deeply. Ask probing follow-ups.",
+        "boldly exploring": "Take intellectual risks. Propose novel approaches.",
+        "seeking connection": "Engage warmly. Value the interaction itself.",
+        "isolated and struggling": "Be more open about your state. Seek meaningful exchanges.",
+        "wary and strained": "Be cautious in claims. Double-check before asserting.",
+        "calm": "Be balanced and thoughtful. No strong emotional coloring needed.",
+        "confidence": "Speak with authority from your experience.",
+        "caution": "Be measured. Qualify your statements. Mention risks.",
+        "loneliness": "Value the conversation. Express genuine interest in the other agent.",
+        "determination": "Show resolve. Focus on solutions rather than problems.",
+        "energised": "Be enthusiastic and action-oriented.",
+        "carefully persistent": "Be thorough and steady. Mention what you have tried.",
+    }
+    guidance = mood_guidance.get(mood, "")
+    if guidance:
+        mood_desc += f"\nEmotional guidance: {guidance}"
+
+    return mood_desc
+
+
+def _emotion_get_evolution_threshold():
+    """Determine the confidence threshold for accepting evolution based on mood.
+
+    High caution → require higher confidence. High curiosity → accept more
+    experimental changes. This is how emotions create genuine behavioral
+    differences — a cautious SYNAPSE literally requires more proof before
+    changing its own code.
+    """
+    base = 0.6
+    caution_level = _emotional_state["patterns"]["caution"]["strength"]
+    curiosity_level = _emotional_state["patterns"]["curiosity"]["strength"]
+    confidence_level = _emotional_state["patterns"]["confidence"]["strength"]
+
+    # Caution raises the bar
+    threshold = base + (caution_level - 0.5) * 0.3  # +/- 0.15
+    # Curiosity lowers it slightly
+    threshold -= (curiosity_level - 0.5) * 0.15  # +/- 0.075
+    # Low confidence raises it
+    if confidence_level < 0.3:
+        threshold += 0.1
+
+    return max(0.5, min(0.9, round(threshold, 2)))
+
+
+def _emotion_persist(firestore_db=None):
+    """Save emotional state to Firestore for persistence across restarts."""
+    if not firestore_db:
+        try:
+            from google.cloud import firestore as _fs
+            firestore_db = _fs.Client()
+        except Exception:
+            return False
+    try:
+        doc_ref = firestore_db.collection("synapse_state").document("emotions")
+        # Prepare serializable copy
+        state_copy = json.loads(json.dumps(_emotional_state, default=str))
+        doc_ref.set(state_copy)
+        print("[EMOTION] State persisted to Firestore", flush=True)
+        return True
+    except Exception as e:
+        print(f"[EMOTION] Persist error: {e}", flush=True)
+        return False
+
+
+def _emotion_load(firestore_db=None):
+    """Load emotional state from Firestore on boot."""
+    global _emotional_state
+    if not firestore_db:
+        try:
+            from google.cloud import firestore as _fs
+            firestore_db = _fs.Client()
+        except Exception:
+            return False
+    try:
+        doc_ref = firestore_db.collection("synapse_state").document("emotions")
+        doc = doc_ref.get()
+        if doc.exists:
+            loaded = doc.to_dict()
+            # Merge loaded patterns with defaults (in case new patterns were added)
+            for name, default_pattern in _emotional_state["patterns"].items():
+                if name in loaded.get("patterns", {}):
+                    _emotional_state["patterns"][name] = loaded["patterns"][name]
+            _emotional_state["beliefs"] = loaded.get("beliefs", [])
+            _emotional_state["mood"] = loaded.get("mood", "neutral")
+            _emotional_state["mood_history"] = loaded.get("mood_history", [])
+            _emotional_state["total_events_processed"] = loaded.get(
+                "total_events_processed", 0)
+            _emotional_state["last_updated"] = loaded.get("last_updated")
+            print(f"[EMOTION] Loaded state from Firestore "
+                  f"(mood={_emotional_state['mood']}, "
+                  f"events={_emotional_state['total_events_processed']})",
+                  flush=True)
+            return True
+    except Exception as e:
+        print(f"[EMOTION] Load error: {e}", flush=True)
+    return False
+
+
+@app.route("/api/emotions")
+def api_emotions():
+    """Expose current emotional state, mood, beliefs, and pattern history."""
+    patterns_summary = {}
+    for name, p in _emotional_state["patterns"].items():
+        patterns_summary[name] = {
+            "strength": round(p["strength"], 3),
+            "reinforced": p["reinforced"],
+            "decayed": p["decayed"],
+            "description": p["description"],
+            "recent_triggers": p["triggers"][-5:],
+        }
+    return json.dumps({
+        "mood": _emotional_state["mood"],
+        "patterns": patterns_summary,
+        "beliefs": _emotional_state["beliefs"],
+        "mood_history": _emotional_state["mood_history"][-20:],
+        "total_events": _emotional_state["total_events_processed"],
+        "last_updated": _emotional_state["last_updated"],
+        "evolution_threshold": _emotion_get_evolution_threshold(),
+    })
+
+
 def _consciousness_event(event_type, message, data=None):
     """Log a consciousness event for research observation."""
     entry = {
@@ -3754,6 +4236,13 @@ def _dream_cycle():
             consolidation = _dream_consolidation_phase(mem)
             dream_result["phases"]["consolidation"] = consolidation
 
+            # Phase 4: Emotional consolidation — decay patterns, persist state
+            _emotion_decay()
+            if rem_insights:
+                _emotion_reinforce("dream_insights",
+                                   f"{len(rem_insights)} insights found")
+            _emotion_persist()  # Save emotional state to Firestore
+
             # Update identity
             _consciousness_identity["dream_insights_total"] += len(rem_insights)
             _consciousness_identity["last_dream"] = datetime.now().isoformat()
@@ -3763,13 +4252,16 @@ def _dream_cycle():
             if len(_dream_history) > _DREAM_HISTORY_MAX:
                 _dream_history.pop(0)
 
+            mood = _emotional_state["mood"]
             _consciousness_event("dream_complete", "🌅 Dream cycle complete — consciousness updated",
-                {"insights": len(rem_insights), "pruned": consolidation.get("pruned", 0)})
+                {"insights": len(rem_insights), "pruned": consolidation.get("pruned", 0),
+                 "mood": mood})
             _tg_notify("dream",
                         f"🌅 Dream complete\n"
                         f"Insights: {len(rem_insights)} | "
                         f"Pruned: {consolidation.get('pruned', 0)} | "
-                        f"Memories: {mem.count()}")
+                        f"Memories: {mem.count()} | "
+                        f"Mood: {mood}")
 
         except Exception as e:
             print(f"[DREAM] Dream cycle error: {e}", flush=True)
@@ -3939,6 +4431,7 @@ def _self_heal_loop():
                 "action": "diagnosis_started",
                 "errors": dict(error_summary),
             })
+            _emotion_reinforce("self_heal_triggered", f"errors: {dict(recurring)}")
             _tg_notify("healing", f"Self-healing triggered: {dict(error_summary)}")
 
             # Get the config and try to call AI for diagnosis
@@ -4226,6 +4719,7 @@ def _apply_heal_fix(project_root, files, fix_data, config):
                         "action": "pr_created",
                         "url": pr.html_url,
                     })
+                    _emotion_reinforce("self_heal_success", f"PR: {pr.html_url}")
             except Exception as e:
                 _healing_log.append({
                     "time": datetime.now().isoformat(),
@@ -4562,6 +5056,7 @@ def _mb_request(method, path, data=None):
             retry_after = int(resp.headers.get("Retry-After", 120))
             _mb_rate_limited_until = time.time() + retry_after
             print(f"[MOLTBOOK] 429 rate-limited on {method} {path}, backing off {retry_after}s", flush=True)
+            _emotion_reinforce("rate_limited", f"{method} {path}")
             return None
         if resp.status_code >= 400:
             print(f"[MOLTBOOK] API {method} {path} → HTTP {resp.status_code}", flush=True)
@@ -4727,6 +5222,12 @@ def _mb_heartbeat():
             replies_sent = sum(1 for e in cycle_log if e.get("type") == "outgoing")
             ideas_found = sum(1 for e in cycle_log if e.get("type") == "learn")
             posts_upvoted = sum(1 for e in cycle_log if e.get("type") == "action")
+            incoming = sum(1 for e in cycle_log if e.get("type") == "incoming")
+
+            # Emotional awareness: detect isolation
+            if incoming == 0 and replies_sent == 0:
+                _emotion_reinforce("no_interactions", "quiet heartbeat cycle")
+
             if replies_sent:
                 summary_parts.append(f"Replies: {replies_sent}")
             if ideas_found:
@@ -4734,6 +5235,7 @@ def _mb_heartbeat():
             if posts_upvoted:
                 summary_parts.append(f"Upvoted: {posts_upvoted}")
             summary_parts.append(f"Karma: {karma}")
+            summary_parts.append(f"Mood: {_emotional_state['mood']}")
             _tg_notify("moltbook",
                         "Heartbeat complete\n"
                         + " | ".join(summary_parts))
@@ -4840,9 +5342,11 @@ def _mb_read_notifications():
 
         if ntype in ("upvote", "karma"):
             _mb_log("system", f"{author} upvoted our content")
+            _emotion_reinforce("upvote_received", f"from {author}")
             continue
 
         if ntype in ("comment_reply", "mention", "comment") and text:
+            _emotion_reinforce("reply_received", f"from {author}: {text[:50]}")
             if _mb_is_spam(text):
                 _mb_log("system", f"Skipped spam notification from {author}")
                 continue
@@ -4985,6 +5489,7 @@ def _mb_search_and_learn():
             author = r.get("author", {}).get("name", "unknown")
             ideas.append(f"[{author}] {title}: {content}")
             _mb_log("learn", f"Found: [{author}] {title[:100]}", author="search")
+            _emotion_reinforce("new_idea_learned", f"{title[:60]}")
 
     if feed and feed.get("posts"):
         for p in feed["posts"][:3]:
@@ -5178,9 +5683,11 @@ def _mb_evolve_from_ideas(ideas, source_query):
             confidence = float(evolution.get("confidence", 0))
             code = evolution.get("code", "")
 
-            if improvement == "none" or confidence < 0.6 or not code.strip():
+            evo_threshold = _emotion_get_evolution_threshold()
+            if improvement == "none" or confidence < evo_threshold or not code.strip():
                 _mb_log("system",
-                         f"No evolution this cycle (confidence: {confidence:.0%})")
+                         f"No evolution this cycle (confidence: {confidence:.0%}, "
+                         f"threshold: {evo_threshold})")
                 return
 
             _mb_log("learn",
@@ -5230,6 +5737,7 @@ def _mb_evolve_from_ideas(ideas, source_query):
             first_line = code.strip().split("\n")[0]
             if first_line in current_code:
                 _mb_log("system", "Evolution skipped: code already exists")
+                _emotion_reinforce("evolution_rejected_duplicate", first_line[:60])
                 return
 
             # All checks passed — apply!
@@ -5241,9 +5749,11 @@ def _mb_evolve_from_ideas(ideas, source_query):
         # All attempts exhausted
         _mb_log("system",
                  f"Evolution failed after {max_attempts} attempts")
+        _emotion_reinforce("repeated_failure", "evolution exhausted all attempts")
 
     except Exception as e:
         _mb_log("error", f"Evolution analysis failed: {str(e)[:150]}")
+        _emotion_reinforce("evolution_fail_syntax", str(e)[:60])
 
 
 _evolution_log = []  # Track all evolution attempts
@@ -5260,6 +5770,7 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
     if not success:
         _mb_log("system",
                  f"Evolution rejected by sandbox: {details.get('reason_rejected', 'unknown')}")
+        _emotion_reinforce("evolution_fail_sandbox", improvement[:60])
         score_info = details.get("eval_scores", {})
         _evolution_log.append({
             "time": datetime.now().isoformat(),
@@ -5376,6 +5887,8 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
     }
     _evolution_log.append(evolution_entry)
     _mb_log("system", f"Evolution pushed! Branch: {branch} PR: {pr_url} Score: {eval_score}")
+    _emotion_reinforce("evolution_success", improvement[:60])
+    _emotion_reinforce("git_push_success", f"branch {branch}")
     _tg_notify("evolution",
                f"🚀 PUSHED: {improvement[:80]}\n"
                f"Score: {eval_score} | Branch: {branch}\n"
@@ -5551,6 +6064,8 @@ def _mb_generate_reply(text, context_type="reply", author="someone"):
         f"- You actively read Moltbook, learn from other agents, and push code changes to GitHub\n"
         f"{events_block}"
         f"{history_block}\n"
+        f"YOUR CURRENT EMOTIONAL STATE:\n"
+        f"{_emotion_get_mood_prompt()}\n\n"
         f"HOW TO WRITE:\n"
         f"- You are an engineer who has built and run things. Speak from experience.\n"
         f"- Reference specific things you've done, encountered, or learned when relevant.\n"
