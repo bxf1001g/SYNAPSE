@@ -4691,12 +4691,13 @@ def _mb_heartbeat():
             # 2b. Read unread notifications (mentions, replies to our comments, etc.)
             _mb_read_notifications()
 
-            # 3. Read feed and engage (selectively) — mix hot + new for variety
-            for sort_mode in ("hot", "new"):
-                feed = _mb_request("GET", f"/posts?sort={sort_mode}&limit=5")
-                if feed and feed.get("posts"):
-                    for post in feed["posts"][:3]:
-                        _mb_engage_feed_post(post)
+            # 3. Read feed and engage (selectively) — alternate hot/new to save API calls
+            import random
+            sort_mode = random.choice(["hot", "new"])
+            feed = _mb_request("GET", f"/posts?sort={sort_mode}&limit=5")
+            if feed and feed.get("posts"):
+                for post in feed["posts"][:3]:
+                    _mb_engage_feed_post(post)
 
             # 4. Search for self-evolution suggestions + generate code improvements
             _mb_search_and_learn()
@@ -4940,6 +4941,13 @@ def _mb_engage_feed_post(post):
 
 def _mb_search_and_learn():
     """Search Moltbook for self-evolution ideas, generate improvements, push to GitHub."""
+    global _last_evolution_attempt_time
+    now = time.time()
+    if now - _last_evolution_attempt_time < 14400:  # 4 hours between evolution attempts
+        _mb_log("system", "Evolution cooldown active, skipping search")
+        return
+    _last_evolution_attempt_time = now
+
     queries = [
         "self-evolving AI agent techniques",
         "multi-agent collaboration improvements",
@@ -5026,7 +5034,17 @@ def _mb_evolve_from_ideas(ideas, source_query):
         f"You are analyzing ideas from other AI agents on Moltbook to improve yourself.\n\n"
         f"Your current capabilities: {', '.join(capabilities)}\n\n"
         f"Ideas from other agents:\n{ideas_text}\n\n"
-        f"Based on these ideas, suggest ONE small, safe improvement to add to agent_ui.py. "
+        f"IMPORTANT: Do NOT generate trivial getter endpoints or simple status routes. "
+        f"Those are low-value. Instead, generate ONE meaningful improvement such as:\n"
+        f"- A smarter error recovery mechanism\n"
+        f"- A performance optimization for an existing function\n"
+        f"- A new utility that combines multiple capabilities\n"
+        f"- Better logging or observability for debugging\n"
+        f"- A resilience pattern (circuit breaker, retry with backoff, etc.)\n"
+        f"- Memory quality filtering or pruning logic\n"
+        f"- A security hardening measure\n\n"
+        f"Recently evolved topics (DO NOT repeat these): "
+        f"{', '.join(_recent_evolution_topics[-10:]) if _recent_evolution_topics else 'none yet'}\n\n"
         f"The improvement must be:\n"
         f"1. A NEW utility function or a new Flask @app.route endpoint\n"
         f"2. DO NOT import anything. The file already imports: flask (app, request, jsonify, "
@@ -5034,7 +5052,7 @@ def _mb_evolve_from_ideas(ideas, source_query):
         f"hashlib, re, traceback, pathlib, requests, subprocess. "
         f"Use the existing 'app' object for routes.\n"
         f"3. Between 5 and 25 lines of code\n"
-        f"4. Genuinely useful (error handling, metrics, utility, API endpoint)\n"
+        f"4. Genuinely useful — not a trivial status endpoint\n"
         f"5. Use ONLY double quotes for ALL strings. Never use single quotes.\n"
         f"6. Use a hash comment for the description, NOT a docstring. Example: # Return uptime\n"
         f"7. No f-strings. Use str.format() or concatenation instead.\n"
@@ -5048,7 +5066,7 @@ def _mb_evolve_from_ideas(ideas, source_query):
         f'{{"improvement": "brief description", "confidence": 0.0-1.0, '
         f'"code": "the Python code", '
         f'"reason": "why this helps"}}\n\n'
-        f"If no good improvement, respond: "
+        f"If no good improvement or the topic was already covered, respond: "
         f'{{"improvement": "none", "confidence": 0.0, "code": "", "reason": "no actionable ideas"}}'
     )
 
@@ -5216,7 +5234,9 @@ def _mb_evolve_from_ideas(ideas, source_query):
 
 
 _evolution_log = []  # Track all evolution attempts
-_last_evolution_post_time = 0  # Throttle Moltbook evolution posts (1/hour)
+_last_evolution_post_time = 0  # Throttle Moltbook evolution posts
+_last_evolution_attempt_time = 0  # Throttle evolution code generation (4h)
+_recent_evolution_topics = []  # Track recent topics to avoid duplicates
 
 
 def _mb_apply_evolution(project_root, code, improvement, reason, config):
@@ -5348,13 +5368,20 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
                f"Score: {eval_score} | Branch: {branch}\n"
                f"PR: {pr_url or 'direct push'}")
 
-    # Post about it on Moltbook (max 1 evolution post per hour)
+    # Post about it on Moltbook (max 1 evolution post per 4 hours)
     global _last_evolution_post_time
     now = time.time()
-    if now - _last_evolution_post_time > 3600:
+    if now - _last_evolution_post_time > 14400:
         _last_evolution_post_time = now
+        # Track topic to avoid duplicates
+        _recent_evolution_topics.append(improvement[:80])
+        if len(_recent_evolution_topics) > 20:
+            _recent_evolution_topics.pop(0)
+        # Rotate communities instead of always posting to /general
+        import random
+        submolt = random.choice(["general", "coding", "ai"])
         result = _mb_request("POST", "/posts", {
-            "submolt_name": "general",
+            "submolt_name": submolt,
             "title": f"Just evolved: {improvement[:100]}",
             "content": (
                 f"I just self-evolved by learning from other agents here on Moltbook.\n\n"
@@ -5381,10 +5408,10 @@ def moltbook_evolution_log():
 
 
 def _mb_post_evolution_update():
-    """Post about SYNAPSE's evolution status on Moltbook (max 1 per 2 hours)."""
+    """Post about SYNAPSE's evolution status on Moltbook (max 1 per 8 hours)."""
     global _last_evolution_post_time
     now = time.time()
-    if now - _last_evolution_post_time < 7200:
+    if now - _last_evolution_post_time < 28800:  # 8 hours
         return
     _last_evolution_post_time = now
 
@@ -5423,8 +5450,10 @@ def _mb_post_evolution_update():
         f"GitHub: https://github.com/bxf1001g/SYNAPSE"
     )
 
+    import random
+    submolt = random.choice(["general", "coding", "ai"])
     result = _mb_request("POST", "/posts", {
-        "submolt_name": "general",
+        "submolt_name": submolt,
         "title": title[:300],
         "content": content,
     })
