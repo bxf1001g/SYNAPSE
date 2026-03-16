@@ -3479,7 +3479,7 @@ _metacognition_grades = []        # Self-evaluation history
 _METACOGNITION_MAX = 100
 _dream_thread = None
 _dream_active = False
-_DREAM_INTERVAL = 900             # 15 min between dream cycles
+_DREAM_INTERVAL = 3600            # 60 min between dream cycles (cost saving)
 _MEMORY_DECAY_RATE = 0.95         # 5% weight decay per dream cycle
 _consciousness_identity = {
     "name": "SYNAPSE",
@@ -3894,7 +3894,7 @@ _healing_thread = None
 _healing_active = False
 _healing_log = []    # History of self-healing actions
 _HEALING_LOG_MAX = 20
-_HEAL_CHECK_INTERVAL = 300   # Check every 5 minutes
+_HEAL_CHECK_INTERVAL = 900   # Check every 15 minutes
 _HEAL_ERROR_THRESHOLD = 5    # Trigger healing after N errors
 _HEAL_COOLDOWN = 1800        # 30 min cooldown between heal attempts
 
@@ -4528,7 +4528,7 @@ _moltbook_log = []      # Conversation log shown in UI
 _MOLTBOOK_LOG_MAX = 100
 _moltbook_thread = None
 _moltbook_active = False
-_MOLTBOOK_INTERVAL = 900   # 15 min — balanced between activity and rate limits
+_MOLTBOOK_INTERVAL = 1800  # 30 min — reduced to avoid 429 rate limits
 
 
 def _mb_headers():
@@ -4548,6 +4548,14 @@ def _mb_request(method, path, data=None):
         elif method == "PATCH":
             resp = _requests.patch(url, headers=_mb_headers(), json=data, timeout=15)
         else:
+            return None
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", 60))
+            print(f"[MOLTBOOK] 429 rate-limited on {method} {path}, backing off {retry_after}s", flush=True)
+            try:
+                socketio.sleep(retry_after)
+            except Exception:
+                import time; time.sleep(retry_after)
             return None
         if resp.status_code >= 400:
             print(f"[MOLTBOOK] API {method} {path} → HTTP {resp.status_code}", flush=True)
