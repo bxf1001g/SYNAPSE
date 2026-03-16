@@ -3100,6 +3100,7 @@ def _tg_handle_command(text):
             "/status - System overview\n"
             "/activity - Recent lifecycle events\n"
             "/dream - Trigger dream cycle\n"
+            "/emotions - Emotional state & mood\n"
             "/grades - Recent self-grades\n"
             "/identity - Personality traits\n"
             "/moltbook - Moltbook status\n"
@@ -3115,6 +3116,7 @@ def _tg_handle_command(text):
         mc = mem.count()
         lines = [
             "SYNAPSE Status\n",
+            f"Mood: {_emotional_state['mood']}",
             f"Memories: {mc}",
             f"Dream cycle: {'active' if _dream_active else 'off'}",
             f"Last dream: {_consciousness_identity.get('last_dream', 'never')}",
@@ -3204,6 +3206,37 @@ def _tg_handle_command(text):
             f"Last heal: {_last_heal_time if _last_heal_time else 'never'}\n"
             f"History: {len(_healing_log)} actions"
         )
+
+    elif cmd == "/emotions":
+        patterns = _emotional_state["patterns"]
+        mood = _emotional_state["mood"]
+        total = _emotional_state["total_events_processed"]
+        threshold = _emotion_get_evolution_threshold()
+        lines = [
+            "SYNAPSE Emotions\n",
+            f"Mood: {mood}",
+            f"Events processed: {total}",
+            f"Evolution threshold: {threshold}\n",
+            "Patterns:",
+        ]
+        sorted_patterns = sorted(
+            patterns.items(), key=lambda x: x[1]["strength"], reverse=True
+        )
+        for name, p in sorted_patterns:
+            bar = "█" * int(p["strength"] * 10) + "░" * (10 - int(p["strength"] * 10))
+            lines.append(f"  {name}: {bar} {p['strength']:.0%}")
+        beliefs = _emotional_state.get("beliefs", [])
+        if beliefs:
+            lines.append("\nBeliefs:")
+            for b in beliefs[:3]:
+                lines.append(f"  • {b['text'][:60]} ({b['confidence']:.0%})")
+        history = _emotional_state.get("mood_history", [])
+        if history:
+            lines.append("\nRecent moods:")
+            for h in history[-5:]:
+                t = h.get("time", "")[-8:]
+                lines.append(f"  {t} → {h.get('mood', '?')}")
+        return "\n".join(lines)
 
     elif cmd == "/memory":
         ws = app.config.get("WORKSPACE", os.getcwd())
