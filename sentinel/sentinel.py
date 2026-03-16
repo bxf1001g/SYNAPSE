@@ -21,8 +21,8 @@ import threading
 import time
 from datetime import datetime, timezone
 
-from flask import Flask, jsonify, request
 import requests as http_requests
+from flask import Flask, jsonify
 
 # ── Optional GCP imports (only available in Cloud Run) ───────────
 try:

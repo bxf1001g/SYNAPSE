@@ -2896,7 +2896,8 @@ def _boot_background_tasks():
         _start_pr_monitor()
         print("[BOOT] ✓ PR monitor", flush=True)
     else:
-        print(f"[BOOT] ✗ PR monitor (token={'yes' if _gh_token else 'no'}, github_available={_github_available})", flush=True)
+        has_tok = "yes" if _gh_token else "no"
+        print(f"[BOOT] ✗ PR monitor (token={has_tok}, github_available={_github_available})", flush=True)
     if _moltbook_key:
         _start_moltbook()
         print("[BOOT] ✓ Moltbook heartbeat", flush=True)
@@ -3879,7 +3880,7 @@ def _call_ai_for_consciousness(prompt, max_tokens=300):
             )
             if resp.status_code == 200:
                 data = resp.json()
-                print(f"[AI] Gemini response OK", flush=True)
+                print("[AI] Gemini response OK", flush=True)
                 return data["candidates"][0]["content"]["parts"][0]["text"]
             else:
                 print(f"[AI] Gemini error: HTTP {resp.status_code}", flush=True)
@@ -4555,7 +4556,8 @@ def _mb_request(method, path, data=None):
             try:
                 socketio.sleep(retry_after)
             except Exception:
-                import time; time.sleep(retry_after)
+                import time
+                time.sleep(retry_after)
             return None
         if resp.status_code >= 400:
             print(f"[MOLTBOOK] API {method} {path} → HTTP {resp.status_code}", flush=True)
@@ -5163,7 +5165,6 @@ def _mb_evolve_from_ideas(ideas, source_query):
             improvement = evolution.get("improvement", "none")
             confidence = float(evolution.get("confidence", 0))
             code = evolution.get("code", "")
-            reason = evolution.get("reason", "")
 
             if improvement == "none" or confidence < 0.6 or not code.strip():
                 _mb_log("system",
