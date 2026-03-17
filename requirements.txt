@@ -24,3 +24,6 @@ anthropic>=0.30
 
 # Cloud Run deployment
 gunicorn>=21.2
+
+# Reddit API
+praw>=7.7

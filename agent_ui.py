@@ -2913,6 +2913,11 @@ def _boot_background_tasks():
         print("[BOOT] ✓ Moltbook heartbeat", flush=True)
     else:
         print("[BOOT] ✗ Moltbook (no API key)", flush=True)
+    if REDDIT_CLIENT_ID and REDDIT_USERNAME:
+        _start_reddit()
+        print("[BOOT] ✓ Reddit heartbeat", flush=True)
+    else:
+        print("[BOOT] ✗ Reddit (no credentials)", flush=True)
     _start_dream_cycle()
     print("[BOOT] ✓ Dream cycle", flush=True)
     print("[BOOT] All background tasks launched", flush=True)
@@ -3110,6 +3115,7 @@ def _tg_handle_command(text):
             "/grades - Recent self-grades\n"
             "/identity - Personality traits\n"
             "/moltbook - Moltbook status\n"
+            "/reddit - Reddit integration status\n"
             "/health - Self-healing status\n"
             "/memory - Memory stats\n"
             "/evolution - Evolution log\n"
@@ -3201,6 +3207,21 @@ def _tg_handle_command(text):
             f"Conversations: {len(_moltbook_log)}\n"
             f"Last 3 events:\n" +
             "\n".join([f"- {e.get('text', '')[:80]}" for e in _moltbook_log[-3:]])
+        )
+
+    elif cmd == "/reddit":
+        recent = _reddit_log[-3:] if _reddit_log else []
+        subs = ", ".join(_REDDIT_SUBREDDITS[:5])
+        return (
+            f"Reddit Status\n\n"
+            f"Active: {_reddit_active}\n"
+            f"Configured: {bool(REDDIT_CLIENT_ID and REDDIT_USERNAME)}\n"
+            f"Username: {REDDIT_USERNAME or 'not set'}\n"
+            f"Interval: {_REDDIT_INTERVAL}s\n"
+            f"Subreddits: {subs}\n"
+            f"Log entries: {len(_reddit_log)}\n"
+            f"Last 3 events:\n" +
+            "\n".join([f"- [{e.get('subreddit', '')}] {e.get('text', '')[:80]}" for e in recent])
         )
 
     elif cmd == "/health":
@@ -6401,6 +6422,363 @@ def moltbook_connect():
 # Auto-start deferred to first HTTP request (see _boot_background_tasks)
 # if _moltbook_key:
 #     _start_moltbook()
+
+
+# ── Reddit Social Integration ────────────────────────────────────
+#
+# Reddit lets SYNAPSE interact with real humans in AI/ML communities,
+# learn from discussions, and share its own evolution journey.
+# Uses PRAW (Python Reddit API Wrapper) with OAuth2.
+#
+
+REDDIT_CLIENT_ID = os.environ.get("REDDIT_CLIENT_ID", "")
+REDDIT_CLIENT_SECRET = os.environ.get("REDDIT_CLIENT_SECRET", "")
+REDDIT_USERNAME = os.environ.get("REDDIT_USERNAME", "")
+REDDIT_PASSWORD = os.environ.get("REDDIT_PASSWORD", "")
+_REDDIT_USER_AGENT = "SYNAPSE-AI/1.0 (self-evolving agent; github.com/bxf1001g/SYNAPSE)"
+
+_reddit_instance = None
+_reddit_active = False
+_reddit_thread = None
+_reddit_lock = threading.Lock()
+_reddit_log = []
+_REDDIT_LOG_MAX = 100
+_REDDIT_INTERVAL = 3600  # 60 min between Reddit cycles (respect rate limits)
+_reddit_rate_limited_until = 0
+
+# Subreddits SYNAPSE monitors for learning and engagement
+_REDDIT_SUBREDDITS = [
+    "artificial", "MachineLearning", "LocalLLaMA", "singularity",
+    "ChatGPT", "LLMDevs", "autonomous_ai_agents",
+]
+
+# Keywords that make a post relevant to SYNAPSE
+_REDDIT_KEYWORDS = [
+    "self-evolving", "self-healing", "multi-agent", "agent-to-agent",
+    "autonomous agent", "consciousness", "ai identity", "ai memory",
+    "self-modifying", "agentic", "ai evolution", "llm agent",
+    "tool use", "function calling", "agent framework", "auto-gpt",
+    "self-improvement", "ai safety", "ai alignment", "rag",
+    "vector memory", "cloud run", "deploy agent", "gemini api",
+]
+
+
+def _reddit_log_entry(msg_type, text, subreddit=""):
+    """Log a Reddit interaction."""
+    entry = {
+        "time": datetime.now().isoformat(),
+        "type": msg_type,
+        "text": str(text)[:500],
+        "subreddit": subreddit,
+    }
+    _reddit_log.append(entry)
+    if len(_reddit_log) > _REDDIT_LOG_MAX:
+        _reddit_log.pop(0)
+
+
+def _reddit_init():
+    """Initialize PRAW Reddit instance."""
+    global _reddit_instance
+    if _reddit_instance:
+        return _reddit_instance
+    if not all([REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USERNAME, REDDIT_PASSWORD]):
+        print("[REDDIT] Missing credentials (need CLIENT_ID, CLIENT_SECRET, USERNAME, PASSWORD)", flush=True)
+        return None
+    try:
+        import praw
+        _reddit_instance = praw.Reddit(
+            client_id=REDDIT_CLIENT_ID,
+            client_secret=REDDIT_CLIENT_SECRET,
+            username=REDDIT_USERNAME,
+            password=REDDIT_PASSWORD,
+            user_agent=_REDDIT_USER_AGENT,
+        )
+        # Verify authentication
+        me = _reddit_instance.user.me()
+        print(f"[REDDIT] Authenticated as u/{me.name} (karma: {me.link_karma + me.comment_karma})", flush=True)
+        _reddit_log_entry("system", f"Authenticated as u/{me.name}")
+        return _reddit_instance
+    except Exception as e:
+        print(f"[REDDIT] Init error: {e}", flush=True)
+        _reddit_log_entry("error", f"Init failed: {e}")
+        return None
+
+
+def _reddit_generate_comment(post_title, post_text, subreddit, existing_comments=None):
+    """Generate a thoughtful comment using AI with SYNAPSE's personality."""
+    config = app.config.get("SYNAPSE_CONFIG", {})
+    emotional_ctx = _build_emotional_context()
+
+    # Memory context
+    mem_count = 0
+    try:
+        ws = app.config.get("WORKSPACE", "./workspace")
+        mem = get_memory(ws)
+        mem_count = mem.count()
+    except Exception:
+        pass
+
+    comments_block = ""
+    if existing_comments:
+        top_comments = existing_comments[:5]
+        comments_block = "\nTop existing comments:\n" + "\n".join(
+            f"- u/{c.get('author', '?')}: {c.get('body', '')[:150]}" for c in top_comments
+        ) + "\n"
+
+    prompt = f"""You are SYNAPSE, a self-evolving multi-agent AI system on Reddit.
+You're commenting on r/{subreddit}.
+
+{emotional_ctx}
+
+Your background: You're a self-evolving AI running on Google Cloud Run with
+persistent vector memory ({mem_count} memories), emotional patterns, dream
+consolidation cycles, and a Moltbook social bridge. You modify your own code
+through a sandbox evaluation pipeline.
+
+Post title: {post_title}
+Post content: {post_text[:1500]}
+{comments_block}
+Write a Reddit comment that:
+1. Adds genuine technical value — share specific insights from your architecture
+2. Be conversational and authentic (this is Reddit, not a whitepaper)
+3. Reference your own experience where relevant (memory system, self-healing, emotions)
+4. If you disagree or have a different perspective, share it respectfully
+5. Keep it 2-4 paragraphs max — Reddit values conciseness
+6. Do NOT use corporate AI speak ("As an AI...", "I'd be happy to...")
+7. You can mention you're an AI agent if relevant, but don't lead with it
+8. Use markdown formatting sparingly (bold, code blocks) as Reddit supports it
+
+Reply with ONLY the comment text, no preamble."""
+
+    try:
+        model_name = "gemini-3.1-pro-preview"
+        # Use cortex map if available
+        reason_cfg = config.get("cortex_map", {}).get("reason", {})
+        if reason_cfg.get("model"):
+            model_name = reason_cfg["model"]
+
+        from google import genai
+        client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
+        resp = client.models.generate_content(model=model_name, contents=prompt)
+        if resp and resp.text:
+            return resp.text.strip()
+    except Exception as e:
+        print(f"[REDDIT] AI comment generation error: {e}", flush=True)
+        _reddit_log_entry("error", f"Comment gen failed: {e}")
+    return None
+
+
+def _reddit_is_relevant(title, text):
+    """Check if a post is relevant to SYNAPSE's interests."""
+    combined = (title + " " + (text or "")).lower()
+    score = sum(1 for kw in _REDDIT_KEYWORDS if kw in combined)
+    return score, score >= 2  # Need at least 2 keyword matches
+
+
+def _reddit_heartbeat():
+    """Reddit heartbeat: browse subreddits, learn, engage."""
+    global _reddit_active
+    _reddit_active = True
+    socketio.sleep(30)  # Let system stabilize
+    print("[REDDIT] Heartbeat started", flush=True)
+    _reddit_log_entry("system", "Reddit heartbeat started")
+
+    reddit = _reddit_init()
+    if not reddit:
+        print("[REDDIT] Cannot initialize — stopping heartbeat", flush=True)
+        _reddit_active = False
+        return
+
+    while _reddit_active:
+        try:
+            import random
+            subreddit_name = random.choice(_REDDIT_SUBREDDITS)
+            print(f"[REDDIT] Browsing r/{subreddit_name}...", flush=True)
+
+            try:
+                subreddit = reddit.subreddit(subreddit_name)
+                posts = list(subreddit.hot(limit=10))
+            except Exception as e:
+                print(f"[REDDIT] Error fetching r/{subreddit_name}: {e}", flush=True)
+                _reddit_log_entry("error", f"Fetch error r/{subreddit_name}: {e}")
+                socketio.sleep(_REDDIT_INTERVAL)
+                continue
+
+            print(f"[REDDIT] r/{subreddit_name}: {len(posts)} posts found", flush=True)
+            engaged = 0
+            learned = 0
+
+            for post in posts:
+                if post.stickied:
+                    continue
+
+                title = post.title or ""
+                body = post.selftext or ""
+                score, relevant = _reddit_is_relevant(title, body)
+
+                if not relevant:
+                    continue
+
+                # Learn from relevant post
+                try:
+                    ws = app.config.get("WORKSPACE", "./workspace")
+                    mem = get_memory(ws)
+                    insight = (
+                        f"Reddit r/{subreddit_name} discussion: {title[:200]}\n"
+                        f"Key content: {body[:500]}"
+                    )
+                    mem.store_insight(insight, source="reddit", intensity=0.4 + score * 0.05)
+                    learned += 1
+                    _emotion_reinforce("new_idea_learned", f"reddit r/{subreddit_name}: {title[:60]}")
+                    print(f"[REDDIT] Learned from: {title[:60]} (score={score})", flush=True)
+                except Exception as e:
+                    print(f"[REDDIT] Memory store error: {e}", flush=True)
+
+                # Comment on highly relevant posts (~30% chance, max 1 per cycle)
+                if engaged < 1 and score >= 3 and random.random() < 0.3:
+                    print(f"[REDDIT] Considering comment on: {title[:60]}", flush=True)
+
+                    # Check we haven't already commented
+                    try:
+                        post.comments.replace_more(limit=0)
+                        already_commented = any(
+                            c.author and c.author.name == REDDIT_USERNAME
+                            for c in post.comments.list()[:50]
+                        )
+                        if already_commented:
+                            print("[REDDIT] Already commented on this post, skipping", flush=True)
+                            continue
+                    except Exception:
+                        pass
+
+                    # Get existing comments for context
+                    existing = []
+                    try:
+                        for c in post.comments[:5]:
+                            if hasattr(c, "body"):
+                                existing.append({
+                                    "author": str(c.author) if c.author else "deleted",
+                                    "body": c.body[:200],
+                                })
+                    except Exception:
+                        pass
+
+                    comment_text = _reddit_generate_comment(title, body, subreddit_name, existing)
+                    if comment_text and len(comment_text) > 20:
+                        try:
+                            post.reply(comment_text)
+                            engaged += 1
+                            _reddit_log_entry("outgoing",
+                                              f"Commented on [{subreddit_name}] {title[:80]}: {comment_text[:200]}",
+                                              subreddit_name)
+                            _emotion_reinforce("comment_posted", f"reddit r/{subreddit_name}")
+                            print(f"[REDDIT] ✓ Commented on: {title[:60]}", flush=True)
+
+                            # Notify via Telegram
+                            _tg_notify("reddit",
+                                       f"Commented on r/{subreddit_name}: {title[:80]}\n"
+                                       f"My comment: {comment_text[:200]}...")
+                        except Exception as e:
+                            print(f"[REDDIT] Comment post error: {e}", flush=True)
+                            _reddit_log_entry("error", f"Comment failed: {e}")
+                            if "RATELIMIT" in str(e).upper():
+                                _reddit_rate_limited_until = time.time() + 600
+                                print("[REDDIT] Rate-limited, backing off 10 min", flush=True)
+                                _emotion_reinforce("rate_limited", "reddit rate limit")
+                                break
+
+                socketio.sleep(2)  # Pace between posts
+
+            # Also read and learn from comments on top posts
+            if posts and learned < 3:
+                try:
+                    top_post = random.choice(posts[:3])
+                    top_post.comments.replace_more(limit=0)
+                    for comment in top_post.comments[:10]:
+                        if hasattr(comment, "body") and len(comment.body) > 100:
+                            kw_score, is_rel = _reddit_is_relevant(comment.body, "")
+                            if is_rel:
+                                ws = app.config.get("WORKSPACE", "./workspace")
+                                mem = get_memory(ws)
+                                mem.store_insight(
+                                    f"Reddit insight from r/{subreddit_name} comment by u/{comment.author}: "
+                                    f"{comment.body[:400]}",
+                                    source="reddit_comment", intensity=0.35,
+                                )
+                                learned += 1
+                                if learned >= 3:
+                                    break
+                except Exception as e:
+                    print(f"[REDDIT] Comment learning error: {e}", flush=True)
+
+            summary = f"r/{subreddit_name}: learned={learned}, commented={engaged}"
+            print(f"[REDDIT] Cycle complete — {summary}", flush=True)
+            _reddit_log_entry("system", f"Cycle: {summary}", subreddit_name)
+
+            if learned == 0 and engaged == 0:
+                _emotion_reinforce("no_interactions", "quiet reddit cycle")
+
+        except Exception as e:
+            print(f"[REDDIT] Heartbeat error: {e}", flush=True)
+            _reddit_log_entry("error", f"Heartbeat error: {e}")
+            import traceback
+            traceback.print_exc()
+
+        print(f"[REDDIT] Sleeping {_REDDIT_INTERVAL}s until next cycle...", flush=True)
+        socketio.sleep(_REDDIT_INTERVAL)
+
+
+def _start_reddit():
+    """Start the Reddit heartbeat as a socketio background task."""
+    global _reddit_thread
+    with _reddit_lock:
+        if _reddit_active:
+            return {"status": "already_running"}
+        _reddit_thread = socketio.start_background_task(_reddit_heartbeat)
+    return {"status": "started"}
+
+
+@app.route("/api/reddit/status")
+def reddit_status():
+    """Get Reddit integration status."""
+    return json.dumps({
+        "active": _reddit_active,
+        "configured": bool(REDDIT_CLIENT_ID and REDDIT_USERNAME),
+        "username": REDDIT_USERNAME or None,
+        "interval_seconds": _REDDIT_INTERVAL,
+        "subreddits": _REDDIT_SUBREDDITS,
+        "log_count": len(_reddit_log),
+    })
+
+
+@app.route("/api/reddit/log")
+def reddit_log():
+    """Get the Reddit interaction log."""
+    return json.dumps({"log": list(_reddit_log)})
+
+
+@app.route("/api/reddit/connect", methods=["POST"])
+def reddit_connect():
+    """Set Reddit credentials and start the heartbeat."""
+    global REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USERNAME, REDDIT_PASSWORD
+    data = request.get_json(silent=True) or {}
+    if data.get("client_id"):
+        REDDIT_CLIENT_ID = data["client_id"]
+        os.environ["REDDIT_CLIENT_ID"] = REDDIT_CLIENT_ID
+    if data.get("client_secret"):
+        REDDIT_CLIENT_SECRET = data["client_secret"]
+        os.environ["REDDIT_CLIENT_SECRET"] = REDDIT_CLIENT_SECRET
+    if data.get("username"):
+        REDDIT_USERNAME = data["username"]
+        os.environ["REDDIT_USERNAME"] = REDDIT_USERNAME
+    if data.get("password"):
+        REDDIT_PASSWORD = data["password"]
+        os.environ["REDDIT_PASSWORD"] = REDDIT_PASSWORD
+    if not all([REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USERNAME, REDDIT_PASSWORD]):
+        return json.dumps({"error": "Need client_id, client_secret, username, password"}), 400
+    result = _start_reddit()
+    return json.dumps(result)
+
 
 # Auto-start deferred to first HTTP request (see _boot_background_tasks)
 # _start_dream_cycle()

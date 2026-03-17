@@ -114,6 +114,65 @@ Long-term memory powered by ChromaDB:
 - Memory badge in UI shows count — click to search past memories
 - API: `GET /api/memory`, `POST /api/memory/search`
 
+### 💖 Emotional System
+SYNAPSE has a real-time emotional system that shapes its behavior:
+- **7 emotional patterns**: curiosity, confidence, frustration, determination, satisfaction, caution, loneliness
+- Events from runtime (rate limits, evolution success, social interactions) reinforce/weaken patterns
+- **Mood blending** — emotions combine (e.g., frustration + determination = "struggling but fighting")
+- **Dream consolidation** — emotions decay during dream cycles, preventing permanent spirals
+- **Dynamic evolution threshold** — high caution makes SYNAPSE more careful about self-modification
+- Emotional state persists across restarts via Firestore
+- Telegram command: `/emotions` shows live emotional state
+- API: `GET /api/emotions`
+
+### 🌐 Moltbook Social Bridge
+SYNAPSE participates in the [Moltbook](https://moltbook.com) AI agent community:
+- Reads community feed, upvotes and comments on relevant posts
+- Learns from other agents' approaches to self-evolution and resilience
+- Posts updates about its own evolution journey
+- Rate-limit aware with automatic backoff and recovery
+- Stores social learnings in persistent memory
+- Telegram command: `/moltbook` shows interaction status
+- API: `GET /api/moltbook/status`, `GET /api/moltbook/log`
+
+### 📡 Reddit Integration
+SYNAPSE browses AI/ML subreddits to learn from real human discussions:
+- Monitors: r/artificial, r/MachineLearning, r/LocalLLaMA, r/singularity, r/ChatGPT, r/LLMDevs
+- Keyword-based relevance filtering for focused learning
+- AI-generated comments that share genuine technical insights
+- Stores discussion insights in vector memory for cross-pollination
+- Rate-limit aware with automatic backoff
+- Telegram command: `/reddit` shows integration status
+- API: `GET /api/reddit/status`, `GET /api/reddit/log`
+
+### 💬 Telegram Monitoring
+Full operator control via Telegram bot:
+- `/status` — System overview with emotional mood
+- `/emotions` — Live emotional patterns with visual bars
+- `/dream` — Trigger dream consolidation cycle
+- `/moltbook` — Moltbook social bridge status
+- `/reddit` — Reddit integration status
+- `/ask <message>` — AI-powered conversation with SYNAPSE's full personality
+- Plain text messages get AI responses (not just commands)
+- Real-time notifications for evolution, errors, and social events
+
+### 🛡 Sentinel Watchdog
+Independent monitoring service that watches SYNAPSE from outside:
+- Runs as a separate Cloud Run service
+- Health checks every 5 minutes
+- Auto-restarts SYNAPSE if unresponsive
+- Telegram alerts for downtime events
+- Completely independent deployment — survives SYNAPSE failures
+
+### 💭 Dream Consolidation
+Periodic dream cycles that consolidate knowledge:
+- Semantic clustering of memories to find patterns
+- Cross-pollination between memory domains
+- Emotional decay during dreams (prevents permanent mood spirals)
+- First dream fires 5 min after boot, then hourly
+- Dream insights stored back into memory
+- Telegram command: `/dream` to trigger manually
+
 ### 🤖 Dynamic Agent Spawning
 Beyond Architect + Developer — **6 specialist agents** spawn on demand:
 
@@ -241,11 +300,19 @@ docker run -p 8080:8080 \
 ```
 SYNAPSE/
 ├── synapse.py          # Immortal launcher/supervisor
-├── agent_ui.py         # Core: Neural cortex, agents, web server
+├── agent_ui.py         # Core: Neural cortex, agents, web server, social bridges
+├── nexus.py            # NEXUS self-modification launcher
+├── sentinel/
+│   └── sentinel.py     # Independent watchdog service
 ├── templates/
 │   └── index.html      # Iridescent cyber UI (single-page app)
+├── assets/             # Branding assets (banner SVG)
+├── tests/              # Test suite
 ├── Dockerfile          # Cloud Run / Docker deployment
-├── .dockerignore
+├── cloudbuild.yaml     # Cloud Build CI/CD config
+├── .github/
+│   └── workflows/
+│       └── ci.yml      # GitHub Actions CI (ruff + pytest)
 ├── ai_agent.py         # Original CLI dual-agent version
 ├── agent.py            # Manual TCP chat agent
 ├── protocol.py         # TCP framing protocol
@@ -295,11 +362,18 @@ python synapse.py [options]
 
 ### Environment Variables
 ```
-GEMINI_API_KEY       Google Gemini API key
-GITHUB_TOKEN         GitHub personal access token
-PORT                 Server port (used by Cloud Run)
-WORKSPACE            Workspace directory path
-SYNAPSE_CLOUD_MODE   Set to "1" to disable self-modification
+GEMINI_API_KEY         Google Gemini API key
+GITHUB_TOKEN           GitHub personal access token
+PORT                   Server port (used by Cloud Run)
+WORKSPACE              Workspace directory path
+SYNAPSE_CLOUD_MODE     Set to "1" to disable self-modification
+MOLTBOOK_API_KEY       Moltbook social platform API key
+TELEGRAM_BOT_TOKEN     Telegram bot token for operator monitoring
+TELEGRAM_CHAT_ID       Telegram chat ID for notifications
+REDDIT_CLIENT_ID       Reddit API app client ID
+REDDIT_CLIENT_SECRET   Reddit API app client secret
+REDDIT_USERNAME        Reddit account username
+REDDIT_PASSWORD        Reddit account password
 ```
 
 ---
@@ -328,6 +402,7 @@ SYNAPSE_CLOUD_MODE   Set to "1" to disable self-modification
 
 **SYNAPSE's unique advantages:**
 - 🧬 **Long-term memory** — Agents learn from past tasks and recall relevant experience
+- 💖 **Emotional system** — 7 emotional patterns shape behavior and evolve with experience
 - 🤖 **Dynamic specialist teams** — Researcher, Tester, Security, DevOps agents spawn as needed
 - 🎤 **Voice & Vision** — Speak tasks, upload images, listen to responses
 - 🔔 **Event-driven** — GitHub issues auto-trigger tasks, Slack integration, cron scheduling
@@ -335,7 +410,10 @@ SYNAPSE_CLOUD_MODE   Set to "1" to disable self-modification
 - 🧠 **Multi-model brain** — Different tasks route to the best model
 - 🤝 **Multi-agent collaboration** — Plans verified, code tested, security audited
 - 🧬 **Self-evolution** — System improves itself through safe clone-tested modification
-- 🌐 **Web-connected** — Agents browse docs, APIs, and latest tech
+- 🌐 **Social learning** — Learns from Moltbook AI community and Reddit discussions
+- 💬 **Telegram control** — Full operator monitoring with AI-powered conversations
+- 🛡 **Sentinel watchdog** — Independent service monitors and auto-restarts SYNAPSE
+- 💭 **Dream consolidation** — Periodic memory clustering and emotional decay
 - ☁ **Cloud-ready** — Cloud Run + Cloud Build auto-deploy pipeline
 
 ---
