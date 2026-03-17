@@ -6941,8 +6941,10 @@ def _discord_generate_reply(message_text, author_name, channel_name,
 
     mood = _emotional_state.get("mood", "neutral")
     patterns = _emotional_state.get("patterns", {})
-    top_emotions = sorted(patterns.items(), key=lambda x: x[1], reverse=True)[:3]
-    emotion_str = ", ".join([f"{k}={v:.2f}" for k, v in top_emotions])
+    top_emotions = sorted(
+        patterns.items(), key=lambda x: x[1].get("strength", 0), reverse=True
+    )[:3]
+    emotion_str = ", ".join([f"{k}={v.get('strength', 0):.2f}" for k, v in top_emotions])
 
     prompt = (
         f"You are SYNAPSE, a self-evolving multi-agent AI system running on "
