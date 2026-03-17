@@ -8707,6 +8707,309 @@ def memory_delete():
         return json.dumps({"error": str(e)}), 500
 
 
+# ── .synapse Brain Export / Import / Merge ───────────────────────
+
+_SYNAPSE_BRAIN_VERSION = "1.0"
+
+
+def _export_all_memories(mem):
+    """Export all memories from the memory store."""
+    memories = []
+    try:
+        if hasattr(mem, "_col"):
+            col = mem._col()
+            if col:
+                docs = list(col.limit(1000).stream())
+                for doc in docs:
+                    data = doc.to_dict()
+                    memories.append({"id": doc.id, **data})
+        elif hasattr(mem, "_get_collection"):
+            col = mem._get_collection()
+            if col:
+                all_data = col.get(limit=1000,
+                                   include=["documents", "metadatas"])
+                docs = all_data.get("documents", [])
+                metas = all_data.get("metadatas", [])
+                ids = all_data.get("ids", [])
+                for i in range(len(docs)):
+                    memories.append({
+                        "id": ids[i] if i < len(ids) else f"mem-{i}",
+                        "text": docs[i] if i < len(docs) else "",
+                        **(metas[i] if i < len(metas) else {}),
+                    })
+    except Exception as e:
+        print(f"[BRAIN] Memory export error: {e}", flush=True)
+    return memories
+
+
+def _import_memories(mem, memories):
+    """Import memories into the memory store."""
+    imported = 0
+    for m in memories:
+        try:
+            text = m.get("text", "")
+            if not text:
+                continue
+            mem_type = m.get("memory_type", "imported")
+            intensity = float(m.get("emotional_intensity", 0.5))
+            mem.store_insight(text, source=mem_type, intensity=intensity)
+            imported += 1
+        except Exception:
+            pass
+    return imported
+
+
+@app.route("/api/brain/export", methods=["GET"])
+def brain_export():
+    """Export SYNAPSE's complete brain as a .synapse JSON file.
+    Contains: identity, emotions, memories, dreams, metacognition, consciousness log."""
+    workspace = app.config.get("WORKSPACE", "./workspace")
+    mem = get_memory(workspace)
+    memories = _export_all_memories(mem)
+
+    brain = {
+        "format": ".synapse",
+        "version": _SYNAPSE_BRAIN_VERSION,
+        "exported_at": datetime.now().isoformat(),
+        "agent_name": _consciousness_identity.get("name", "SYNAPSE"),
+        "identity": json.loads(json.dumps(_consciousness_identity, default=str)),
+        "emotions": json.loads(json.dumps(_emotional_state, default=str)),
+        "memories": memories,
+        "dreams": list(_dream_history),
+        "metacognition": list(_metacognition_grades),
+        "consciousness_log": list(_consciousness_log[-100:]),
+        "stats": {
+            "total_memories": len(memories),
+            "total_dreams": len(_dream_history),
+            "total_grades": len(_metacognition_grades),
+            "personality_changes": len(
+                _consciousness_identity.get("personality_changelog", [])),
+            "emotional_events": _emotional_state.get(
+                "total_events_processed", 0),
+        },
+    }
+
+    response = app.response_class(
+        response=json.dumps(brain, indent=2, default=str),
+        status=200,
+        mimetype="application/json",
+    )
+    filename = (f"synapse-brain-"
+                f"{datetime.now().strftime('%Y%m%d-%H%M%S')}.synapse")
+    response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+    return response
+
+
+@app.route("/api/brain/import", methods=["POST"])
+def brain_import():
+    """Import a .synapse brain file into this instance.
+    Merges memories and optionally replaces identity/emotions."""
+    global _consciousness_identity, _emotional_state
+    data = request.get_json(silent=True)
+    if not data:
+        return json.dumps({"error": "No brain data provided"}), 400
+    if data.get("format") != ".synapse":
+        return json.dumps({"error": "Invalid format — expected .synapse"}), 400
+
+    mode = request.args.get("mode", "merge")  # merge | replace | memories_only
+    result = {"mode": mode, "imported": {}}
+
+    # Import memories
+    memories = data.get("memories", [])
+    if memories:
+        workspace = app.config.get("WORKSPACE", "./workspace")
+        mem = get_memory(workspace)
+        imported = _import_memories(mem, memories)
+        result["imported"]["memories"] = imported
+
+    if mode in ("merge", "replace"):
+        # Import identity
+        identity = data.get("identity")
+        if identity:
+            if mode == "replace":
+                _consciousness_identity = identity
+            else:
+                # Merge: blend personality traits (average)
+                for trait, val in identity.get(
+                        "personality_traits", {}).items():
+                    if trait in _consciousness_identity["personality_traits"]:
+                        current = _consciousness_identity[
+                            "personality_traits"][trait]
+                        _consciousness_identity[
+                            "personality_traits"][trait] = round(
+                            (current + float(val)) / 2, 2)
+                # Merge strengths/weaknesses (union)
+                existing_strengths = set(
+                    _consciousness_identity.get("strengths", []))
+                existing_strengths.update(
+                    identity.get("strengths", []))
+                _consciousness_identity["strengths"] = list(
+                    existing_strengths)[:10]
+                existing_weaknesses = set(
+                    _consciousness_identity.get("weaknesses", []))
+                existing_weaknesses.update(
+                    identity.get("weaknesses", []))
+                _consciousness_identity["weaknesses"] = list(
+                    existing_weaknesses)[:10]
+                # Append personality changelog
+                _consciousness_identity.setdefault(
+                    "personality_changelog", []).extend(
+                    identity.get("personality_changelog", []))
+            result["imported"]["identity"] = True
+
+        # Import emotions
+        emotions = data.get("emotions")
+        if emotions:
+            if mode == "replace":
+                _emotional_state.update(emotions)
+            else:
+                # Merge: average pattern strengths
+                for name, pattern in emotions.get("patterns", {}).items():
+                    if name in _emotional_state["patterns"]:
+                        curr = _emotional_state["patterns"][name][
+                            "strength"]
+                        imported_s = float(pattern.get("strength", 0.5))
+                        _emotional_state["patterns"][name][
+                            "strength"] = round(
+                            (curr + imported_s) / 2, 2)
+                # Merge beliefs (union, dedup by text)
+                existing_texts = {b["text"]
+                                  for b in _emotional_state.get(
+                                      "beliefs", [])}
+                for belief in emotions.get("beliefs", []):
+                    if belief.get("text") not in existing_texts:
+                        _emotional_state.setdefault(
+                            "beliefs", []).append(belief)
+            _emotion_persist()
+            result["imported"]["emotions"] = True
+
+    result["status"] = "success"
+    _consciousness_event(
+        "brain_import",
+        f"Brain imported (mode={mode}): "
+        f"{result['imported'].get('memories', 0)} memories")
+    return json.dumps(result)
+
+
+@app.route("/api/brain/merge", methods=["POST"])
+def brain_merge():
+    """Merge two .synapse brain files and return the combined brain.
+    POST with JSON: {"brain_a": {...}, "brain_b": {...}, "strategy": "weighted"}
+    Strategies: equal (50/50), weighted (by memory count), primary_a, primary_b"""
+    data = request.get_json(silent=True) or {}
+    brain_a = data.get("brain_a", {})
+    brain_b = data.get("brain_b", {})
+    strategy = data.get("strategy", "equal")
+
+    if not brain_a or not brain_b:
+        return json.dumps({"error": "Provide both brain_a and brain_b"}), 400
+
+    # Calculate weights based on strategy
+    mems_a = len(brain_a.get("memories", []))
+    mems_b = len(brain_b.get("memories", []))
+    total = max(mems_a + mems_b, 1)
+    if strategy == "weighted":
+        w_a, w_b = mems_a / total, mems_b / total
+    elif strategy == "primary_a":
+        w_a, w_b = 0.7, 0.3
+    elif strategy == "primary_b":
+        w_a, w_b = 0.3, 0.7
+    else:
+        w_a, w_b = 0.5, 0.5
+
+    # Merge personality traits (weighted average)
+    merged_traits = {}
+    traits_a = brain_a.get("identity", {}).get("personality_traits", {})
+    traits_b = brain_b.get("identity", {}).get("personality_traits", {})
+    all_traits = set(list(traits_a.keys()) + list(traits_b.keys()))
+    for trait in all_traits:
+        val_a = float(traits_a.get(trait, 0.5))
+        val_b = float(traits_b.get(trait, 0.5))
+        merged_traits[trait] = round(val_a * w_a + val_b * w_b, 3)
+
+    # Merge emotional patterns (weighted average)
+    merged_emotions = {"patterns": {}, "beliefs": [], "mood": "neutral",
+                       "mood_history": [], "total_events_processed": 0}
+    pats_a = brain_a.get("emotions", {}).get("patterns", {})
+    pats_b = brain_b.get("emotions", {}).get("patterns", {})
+    all_pats = set(list(pats_a.keys()) + list(pats_b.keys()))
+    for pat in all_pats:
+        s_a = float(pats_a.get(pat, {}).get("strength", 0.5))
+        s_b = float(pats_b.get(pat, {}).get("strength", 0.5))
+        desc_a = pats_a.get(pat, {}).get("description", "")
+        desc_b = pats_b.get(pat, {}).get("description", desc_a)
+        merged_emotions["patterns"][pat] = {
+            "strength": round(s_a * w_a + s_b * w_b, 3),
+            "triggers": [],
+            "reinforced": 0, "decayed": 0,
+            "description": desc_a or desc_b,
+        }
+
+    # Merge beliefs (union, dedup by text)
+    seen_beliefs = set()
+    for belief in (brain_a.get("emotions", {}).get("beliefs", [])
+                   + brain_b.get("emotions", {}).get("beliefs", [])):
+        txt = belief.get("text", "")
+        if txt and txt not in seen_beliefs:
+            seen_beliefs.add(txt)
+            merged_emotions["beliefs"].append(belief)
+
+    # Merge memories (union, dedup by text similarity)
+    merged_memories = []
+    seen_texts = set()
+    for m in brain_a.get("memories", []) + brain_b.get("memories", []):
+        text = m.get("text", "")
+        key = text[:100].lower().strip()
+        if key and key not in seen_texts:
+            seen_texts.add(key)
+            merged_memories.append(m)
+
+    # Merge strengths/weaknesses (union)
+    strengths = list(set(
+        brain_a.get("identity", {}).get("strengths", [])
+        + brain_b.get("identity", {}).get("strengths", [])))[:10]
+    weaknesses = list(set(
+        brain_a.get("identity", {}).get("weaknesses", [])
+        + brain_b.get("identity", {}).get("weaknesses", [])))[:10]
+
+    # Build merged brain
+    merged_brain = {
+        "format": ".synapse",
+        "version": _SYNAPSE_BRAIN_VERSION,
+        "exported_at": datetime.now().isoformat(),
+        "agent_name": f"Merged ({brain_a.get('agent_name', 'A')} + "
+                      f"{brain_b.get('agent_name', 'B')})",
+        "merge_strategy": strategy,
+        "merge_weights": {"a": w_a, "b": w_b},
+        "identity": {
+            "name": "SYNAPSE",
+            "version": _SYNAPSE_BRAIN_VERSION,
+            "personality_traits": merged_traits,
+            "strengths": strengths,
+            "weaknesses": weaknesses,
+            "personality_changelog": (
+                brain_a.get("identity", {}).get(
+                    "personality_changelog", [])
+                + brain_b.get("identity", {}).get(
+                    "personality_changelog", [])),
+        },
+        "emotions": merged_emotions,
+        "memories": merged_memories,
+        "dreams": (brain_a.get("dreams", [])
+                   + brain_b.get("dreams", [])),
+        "metacognition": (brain_a.get("metacognition", [])
+                          + brain_b.get("metacognition", [])),
+        "stats": {
+            "total_memories": len(merged_memories),
+            "memories_from_a": mems_a,
+            "memories_from_b": mems_b,
+            "deduped": (mems_a + mems_b) - len(merged_memories),
+        },
+    }
+
+    return json.dumps(merged_brain, indent=2, default=str)
+
+
 # ── A2A Protocol Endpoints ──────────────────────────────────────
 
 @app.route("/.well-known/agent.json", methods=["GET"])
