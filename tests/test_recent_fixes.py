@@ -4,7 +4,6 @@ import json
 
 import pytest
 
-
 # ── JSON newline fixer (extracted from _extract_json inner function) ──
 
 def _fix_newlines(s):
@@ -65,7 +64,10 @@ class TestFixNewlines:
         assert parsed["code"] == "line1\nline2"
 
     def test_multiline_code_block(self):
-        raw = '{"improvement": "test", "code": "import os\nimport sys\n\ndef main():\n    print(os.getcwd())\n    return 0"}'
+        raw = (
+            '{"improvement": "test", "code": "import os\nimport sys\n\n'
+            'def main():\n    print(os.getcwd())\n    return 0"}'
+        )
         fixed = _fix_newlines(raw)
         parsed = json.loads(fixed)
         assert "import os" in parsed["code"]
