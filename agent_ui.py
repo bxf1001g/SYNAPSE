@@ -4402,14 +4402,14 @@ def _dream_imagination_phase(memory_obj):
 
     # If Google Search is available, search one random topic for fresh info
     search_context = ""
-    if os.environ.get("GOOGLE_SEARCH_CX"):
-        search_topic = _rng.choice(topics)
-        search_results = _google_search(f"{search_topic} latest discoveries 2026", num_results=3)
-        if search_results:
-            search_context = (
-                "\n\nFRESH WEB KNOWLEDGE (just searched):\n"
-                + "\n".join([f"- {r['title']}: {r['snippet']}" for r in search_results[:3]])
-            )
+    search_topic = _rng.choice(topics)
+    search_results = _google_search(
+        f"latest discoveries breakthroughs in {search_topic} 2026", num_results=3)
+    if search_results:
+        search_context = (
+            "\n\nFRESH WEB KNOWLEDGE (just searched):\n"
+            + "\n".join([f"- {r['title']}: {r['snippet'][:200]}" for r in search_results[:3]])
+        )
 
     mem_texts = ""
     if random_mems:
@@ -4834,47 +4834,56 @@ def _call_ai_for_consciousness(prompt, max_tokens=300, temperature=0.7):
     return None
 
 
-# ── Google Search Capability ─────────────────────────────────────
+# ── Google Search Capability (via Gemini Search Grounding) ────────
 
 def _google_search(query, num_results=5):
-    """Search the web via Google Custom Search JSON API.
-    Requires GOOGLE_SEARCH_CX env var (Programmable Search Engine ID).
-    Uses the existing GEMINI_API_KEY for auth."""
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    cx = os.environ.get("GOOGLE_SEARCH_CX", "")
-    if not api_key or not cx or not _requests_available:
+    """Search the web via Gemini's built-in Google Search grounding.
+    Returns search-informed AI summary + source snippets."""
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if not gemini_key or not _requests_available:
         return []
     try:
-        resp = _requests.get(
-            "https://www.googleapis.com/customsearch/v1",
-            params={"key": api_key, "cx": cx, "q": query,
-                    "num": min(num_results, 10)},
-            timeout=15
+        resp = _requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"gemini-2.0-flash:generateContent?key={gemini_key}",
+            json={
+                "contents": [{"parts": [{"text": query}]}],
+                "tools": [{"google_search": {}}],
+                "generationConfig": {"maxOutputTokens": 300, "temperature": 0.3},
+            },
+            timeout=20
         )
         if resp.status_code != 200:
-            print(f"[SEARCH] Google error: {resp.status_code}", flush=True)
+            print(f"[SEARCH] Gemini search error: {resp.status_code}", flush=True)
             return []
-        items = resp.json().get("items", [])
-        return [{"title": it.get("title", ""), "snippet": it.get("snippet", ""),
-                 "link": it.get("link", "")} for it in items]
+        data = resp.json()
+        candidates = data.get("candidates", [])
+        if not candidates:
+            return []
+        text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+        # Extract grounding metadata if available
+        grounding = candidates[0].get("groundingMetadata", {})
+        sources = []
+        for chunk in grounding.get("groundingChunks", []):
+            web = chunk.get("web", {})
+            if web:
+                sources.append({"title": web.get("title", ""), "link": web.get("uri", ""),
+                                "snippet": ""})
+        return [{"title": "Search Summary", "snippet": text, "link": ""}] + sources[:num_results]
     except Exception as e:
         print(f"[SEARCH] Error: {e}", flush=True)
         return []
 
 
 def _search_and_summarize(topic, context=""):
-    """Search the web for a topic and return a concise summary."""
-    results = _google_search(topic, num_results=5)
-    if not results:
-        return ""
-    snippets = "\n".join([f"- {r['title']}: {r['snippet']}" for r in results[:5]])
-    prompt = (
-        f"Summarize these search results about '{topic}' in 2-3 sentences. "
-        f"Focus on facts, trends, and novel insights.\n\n{snippets}"
-    )
+    """Search the web for a topic and return a concise summary via Gemini grounding."""
+    prompt = f"Search for the latest information about: {topic}"
     if context:
-        prompt += f"\n\nContext for why this matters: {context}"
-    return _call_ai_for_consciousness(prompt, max_tokens=200) or ""
+        prompt += f"\nContext: {context}"
+    results = _google_search(prompt)
+    if results:
+        return results[0].get("snippet", "")
+    return ""
 
 
 # ── Self-Healing Loop ────────────────────────────────────────────
@@ -8495,16 +8504,11 @@ def list_webhook_tasks():
 
 @app.route("/api/search", methods=["POST"])
 def api_search():
-    """Search the web via Google Custom Search."""
+    """Search the web via Gemini Search Grounding."""
     data = request.get_json(silent=True) or {}
     query = data.get("query", "")
     if not query:
         return json.dumps({"error": "No query provided"}), 400
-    cx = os.environ.get("GOOGLE_SEARCH_CX", "")
-    if not cx:
-        return json.dumps({"error": "GOOGLE_SEARCH_CX not configured",
-                           "setup": "Set env var GOOGLE_SEARCH_CX with your "
-                           "Programmable Search Engine ID"}), 503
     results = _google_search(query, num_results=data.get("num", 5))
     return json.dumps({"query": query, "results": results, "count": len(results)})
 
@@ -8512,11 +8516,9 @@ def api_search():
 @app.route("/api/search/status", methods=["GET"])
 def api_search_status():
     """Check if Google Search is configured."""
-    cx = os.environ.get("GOOGLE_SEARCH_CX", "")
     return json.dumps({
-        "configured": bool(cx),
-        "cx_set": bool(cx),
-        "api_key_set": bool(os.environ.get("GEMINI_API_KEY")),
+        "configured": bool(os.environ.get("GEMINI_API_KEY")),
+        "method": "gemini_search_grounding",
     })
 
 
