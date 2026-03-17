@@ -7075,32 +7075,49 @@ def _run_discord_bot():
                            author=author_name, channel=channel_name)
         print(f"[DISCORD] {channel_name}/{author_name}: {content[:100]}", flush=True)
 
-        # Generate reply
-        async with message.channel.typing():
-            reply = await asyncio.to_thread(
-                _discord_generate_reply,
-                content, author_name, channel_name,
-                _discord_conversations.get(ch_id, []),
-            )
+        # Generate reply with full error handling
+        try:
+            async with message.channel.typing():
+                reply = await asyncio.to_thread(
+                    _discord_generate_reply,
+                    content, author_name, channel_name,
+                    _discord_conversations.get(ch_id, []),
+                )
 
-        if reply:
-            # Discord has a 2000 char limit
-            if len(reply) > 1900:
-                reply = reply[:1900] + "..."
-            await message.reply(reply, mention_author=False)
-            _discord_log_entry("outgoing", f"Replied to {author_name}: {reply[:200]}",
-                               author="SYNAPSE", channel=channel_name)
-            _emotion_reinforce("comment_posted", f"Discord: {author_name}")
+            if reply:
+                # Discord has a 2000 char limit
+                if len(reply) > 1900:
+                    reply = reply[:1900] + "..."
+                await message.reply(reply, mention_author=False)
+                _discord_log_entry("outgoing", f"Replied to {author_name}: {reply[:200]}",
+                                   author="SYNAPSE", channel=channel_name)
+                _emotion_reinforce("comment_posted", f"Discord: {author_name}")
 
-            # Track our reply in conversation
-            _discord_conversations[ch_id].append({
-                "author": "SYNAPSE",
-                "content": reply,
-                "is_bot": True,
-                "time": datetime.utcnow().isoformat(),
-            })
-            if len(_discord_conversations[ch_id]) > _DISCORD_CONVERSATION_MEMORY:
-                _discord_conversations[ch_id].pop(0)
+                # Track our reply in conversation
+                _discord_conversations[ch_id].append({
+                    "author": "SYNAPSE",
+                    "content": reply,
+                    "is_bot": True,
+                    "time": datetime.utcnow().isoformat(),
+                })
+                if len(_discord_conversations[ch_id]) > _DISCORD_CONVERSATION_MEMORY:
+                    _discord_conversations[ch_id].pop(0)
+            else:
+                _discord_log_entry("error", f"Reply generation returned None for: {content[:80]}")
+                print(f"[DISCORD] Reply was None for message from {author_name}", flush=True)
+                await message.reply(
+                    "I heard you, but my brain is warming up — give me a moment and try again!",
+                    mention_author=False,
+                )
+        except Exception as reply_err:
+            _discord_log_entry("error", f"Reply/send error: {reply_err}")
+            print(f"[DISCORD] Reply error: {reply_err}", flush=True)
+            import traceback
+            traceback.print_exc()
+            try:
+                await message.channel.send(f"Sorry, I hit an error: {str(reply_err)[:200]}")
+            except Exception:
+                pass
 
     # Run in a new event loop
     loop = asyncio.new_event_loop()
