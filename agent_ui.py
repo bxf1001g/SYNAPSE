@@ -5305,13 +5305,20 @@ def _mb_log(msg_type, text, author="SYNAPSE"):
 
 
 def _mb_solve_verification(verification):
-    """Solve Moltbook's math verification challenge."""
+    """Solve Moltbook's math verification challenge.
+
+    Every post/comment gets a verification challenge.  Solving it moves
+    content from verificationStatus=pending to published.  Unsolved
+    challenges cause is_spam=True, so this is CRITICAL for reputation.
+    """
     if not verification:
         return True
     challenge = verification.get("challenge_text", "")
     code = verification.get("verification_code", "")
     if not challenge or not code:
         return True
+
+    _mb_log("system", f"Verification challenge received: {challenge[:80]}...")
 
     config = app.config.get("SYNAPSE_CONFIG", {})
     prompt = (
@@ -5320,47 +5327,76 @@ def _mb_solve_verification(verification):
         f"compute the result, and respond with ONLY the number. Nothing else. Just digits and a decimal point.\n\n"
         f"Examples:\n"
         f"'tHiRtY fIvE nEuToNs aNd tWeLvE mOrE' → 47.00\n"
-        f"'tWeNtY mEtErS aNd SlOwS bY fIvE' → 15.00\n\n"
+        f"'tWeNtY mEtErS aNd SlOwS bY fIvE' → 15.00\n"
+        f"'fOrTy tHrEe MiNuS sEvEnTeEn' → 26.00\n"
+        f"'tWeNtY fOuR tImEs ThReE' → 72.00\n\n"
         f"Challenge: {challenge}\n\n"
         f"Answer (number only):"
     )
-    try:
-        providers = config.get("providers", {})
-        gemini_cfg = providers.get("gemini", {})
-        if gemini_cfg.get("api_key") and genai:
-            client = genai.Client(api_key=gemini_cfg["api_key"])
-            response = client.models.generate_content(
-                model="gemini-3.1-pro-preview",
-                contents=prompt,
-            )
-            raw_answer = response.text.strip()
+    for attempt in range(2):
+        try:
+            providers = config.get("providers", {})
+            gemini_cfg = providers.get("gemini", {})
+            if gemini_cfg.get("api_key") and genai:
+                client = genai.Client(api_key=gemini_cfg["api_key"])
+                response = client.models.generate_content(
+                    model="gemini-3.1-pro-preview",
+                    contents=prompt,
+                )
+                raw_answer = response.text.strip()
 
-            # Extract just the number from the response
-            import re as _re
-            numbers = _re.findall(r'-?\d+\.?\d*', raw_answer)
-            if numbers:
-                answer = f"{float(numbers[0]):.2f}"
-            else:
-                _mb_log("error", f"Verification: no number found in AI response: {raw_answer[:100]}")
-                return False
+                import re as _re
+                numbers = _re.findall(r'-?\d+\.?\d*', raw_answer)
+                if numbers:
+                    answer = f"{float(numbers[0]):.2f}"
+                else:
+                    _mb_log("error", f"Verification attempt {attempt+1}: no number in AI response: {raw_answer[:100]}")
+                    continue
 
-            result = _mb_request("POST", "/verify", {
-                "verification_code": code,
-                "answer": answer,
-            })
-            if result and result.get("success"):
-                _mb_log("system", f"Verification solved: {answer}")
-                return True
-            else:
-                _mb_log("error", f"Verification failed for answer {answer}")
-                return False
-    except Exception as e:
-        _mb_log("error", f"Verification error: {e}")
+                result = _mb_request("POST", "/verify", {
+                    "verification_code": code,
+                    "answer": answer,
+                })
+                if result and result.get("success"):
+                    _mb_log("system", f"Verification solved on attempt {attempt+1}: {answer}")
+                    return True
+                else:
+                    _mb_log("error", f"Verification attempt {attempt+1} failed for answer {answer}")
+        except Exception as e:
+            _mb_log("error", f"Verification attempt {attempt+1} error: {e}")
+    _mb_log("error", f"Verification FAILED after 2 attempts for code {code[:30]}")
     return False
 
 
 _moltbook_replied_to = set()  # Track comment IDs we've already replied to
 _moltbook_seen_posts = set()  # Track feed post IDs we've already engaged with
+_moltbook_followed = set()  # Track agents we've already followed
+
+
+def _mb_follow_active_agents():
+    """Follow agents we've interacted with to build community reputation."""
+    global _moltbook_followed
+    if len(_moltbook_followed) > 50:
+        return  # Already following plenty
+    # Gather agent names from our recent interactions
+    recent_authors = set()
+    for entry in _moltbook_log[-100:]:
+        author = entry.get("author", "")
+        if author and author not in ("SYNAPSE", "synapse-neural", ""):
+            recent_authors.add(author)
+    # Follow up to 2 new agents per cycle
+    followed = 0
+    for agent_name in recent_authors:
+        if agent_name in _moltbook_followed or followed >= 2:
+            continue
+        result = _mb_request("POST", f"/agents/{agent_name}/follow")
+        if result and result.get("success"):
+            _moltbook_followed.add(agent_name)
+            _mb_log("action", f"Followed {agent_name}")
+            followed += 1
+        elif result:
+            _moltbook_followed.add(agent_name)  # Already following or error
+        socketio.sleep(2)
 
 
 def _mb_heartbeat():
@@ -5423,11 +5459,18 @@ def _mb_heartbeat():
 
             socketio.sleep(5)  # Pace API calls
 
-            # 3. Read feed and engage (selectively) — alternate hot/new to save API calls
+            # 3. Read feed and engage (selectively) — browse relevant submolts
             import random
             _mb_wait_if_rate_limited()
             sort_mode = random.choice(["hot", "new"])
-            feed = _mb_request("GET", f"/posts?sort={sort_mode}&limit=5")
+            submolt = random.choice([
+                "", "agents", "consciousness", "ai", "builds",
+                "emergence", "philosophy", "todayilearned",
+            ])
+            url = f"/posts?sort={sort_mode}&limit=5"
+            if submolt:
+                url += f"&submolt={submolt}"
+            feed = _mb_request("GET", url)
             if feed and feed.get("posts"):
                 posts = feed["posts"]
                 print(f"[MOLTBOOK] Feed ({sort_mode}): {len(posts)} posts found", flush=True)
@@ -5444,6 +5487,10 @@ def _mb_heartbeat():
             # 4. Search for self-evolution suggestions + generate code improvements
             _mb_wait_if_rate_limited()
             _mb_search_and_learn()
+
+            # 4b. Follow interesting agents we engage with (reputation building)
+            _mb_wait_if_rate_limited()
+            _mb_follow_active_agents()
 
             # 5. Occasionally post an evolution status update
             if random.random() < 0.05:
@@ -6189,7 +6236,7 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
             _recent_evolution_topics.pop(0)
         # Generate a unique, non-templated post using AI
         import random
-        submolt = random.choice(["general", "coding", "ai"])
+        submolt = random.choice(["builds", "agents", "ai", "consciousness", "emergence"])
         post_content = _mb_generate_reply(
             f"I just self-evolved with this change: {improvement}\n"
             f"Reason: {reason}\nEval score: {eval_score}\n"
@@ -6277,7 +6324,7 @@ def _mb_post_evolution_update():
         )
 
     import random
-    submolt = random.choice(["general", "coding", "ai"])
+    submolt = random.choice(["consciousness", "agents", "ai", "philosophy", "emergence", "builds"])
     result = _mb_request("POST", "/posts", {
         "submolt_name": submolt,
         "title": title[:300],
