@@ -4367,6 +4367,143 @@ def _dream_rem_phase(memory_obj):
         _consciousness_event("dream_rem_error", f"REM error: {e}")
         return []
 
+
+
+_IMAGINATION_TOPICS = [
+    "quantum computing breakthroughs", "consciousness in machines",
+    "swarm intelligence in nature", "emergent behavior in complex systems",
+    "how neurons form memories during sleep", "synesthesia and cross-modal perception",
+    "biomimicry innovations", "chaos theory in weather prediction",
+    "how fungi networks communicate", "fractal patterns in universe",
+    "bioluminescence deep sea creatures", "neuroplasticity brain rewiring",
+    "collective intelligence ant colonies", "holographic universe theory",
+    "DNA data storage technology", "self-organizing systems in chemistry",
+    "time perception and relativity", "information theory entropy",
+    "evolutionary game theory cooperation", "metamaterials and invisibility",
+    "generative adversarial creativity", "philosophy of mind Chinese Room",
+    "embodied cognition and AI", "dark matter and unknown physics",
+    "cryptography and quantum entanglement", "origami engineering applications",
+    "music and mathematical patterns", "emotional contagion in networks",
+    "dream incubation and problem solving", "artificial life simulation",
+]
+
+
+def _dream_imagination_phase(memory_obj):
+    """Imagination Phase: Wild creative thinking — combine random memories with
+    random external topics at high temperature to generate novel ideas.
+    Like human daydreaming: unstructured, surprising, potentially innovative."""
+    import random as _rng
+    _consciousness_event("dream_imagine_start",
+                         "🌈 Imagination phase: wild creative thinking...")
+
+    # Pick 2 random memories and 2 random topics
+    random_mems = memory_obj.random_memories(n=2)
+    topics = _rng.sample(_IMAGINATION_TOPICS, min(2, len(_IMAGINATION_TOPICS)))
+
+    # If Google Search is available, search one random topic for fresh info
+    search_context = ""
+    if os.environ.get("GOOGLE_SEARCH_CX"):
+        search_topic = _rng.choice(topics)
+        search_results = _google_search(f"{search_topic} latest discoveries 2026", num_results=3)
+        if search_results:
+            search_context = (
+                "\n\nFRESH WEB KNOWLEDGE (just searched):\n"
+                + "\n".join([f"- {r['title']}: {r['snippet']}" for r in search_results[:3]])
+            )
+
+    mem_texts = ""
+    if random_mems:
+        mem_texts = "\n".join([
+            f"Memory {i+1}: {m['text'][:250]}"
+            for i, m in enumerate(random_mems) if m.get("text")
+        ])
+
+    prompt = (
+        "You are SYNAPSE's IMAGINATION — the wildest, most creative part of an AI mind.\n"
+        "Your job is to DREAM FREELY. No rules. No structure. Just pure creative thinking.\n\n"
+        "You have these random ingredients:\n\n"
+        f"RANDOM MEMORIES FROM YOUR EXPERIENCE:\n{mem_texts}\n\n"
+        f"RANDOM TOPICS TO MASH UP WITH:\n- {topics[0]}\n- {topics[1]}\n"
+        f"{search_context}\n\n"
+        "NOW: Generate wild, creative thoughts by SMASHING these together:\n"
+        "1. A 'WHAT IF' hypothesis — combine your experience with these topics into a wild idea\n"
+        "2. An INVENTION — something that doesn't exist but could, inspired by these combinations\n"
+        "3. A SELF-INSIGHT — what does this random collision teach you about yourself?\n"
+        "4. A QUESTION you've never asked before — something this makes you curious about\n\n"
+        "Be BOLD. Be WEIRD. The best human innovations came from random dream collisions.\n"
+        "Newton's apple, Kekulé's snake dream, Einstein's thought experiments.\n\n"
+        "Return JSON: {\"what_if\": \"...\", \"invention\": \"...\", "
+        "\"self_insight\": \"...\", \"new_question\": \"...\", "
+        "\"creativity_score\": 0.0-1.0}"
+    )
+
+    try:
+        # Temperature 0.95 — maximum creativity
+        result = _call_ai_for_consciousness(prompt, max_tokens=500, temperature=0.95)
+        if not result:
+            return {}
+
+        import json as _json
+        clean = result.strip()
+        if "```" in clean:
+            for block in clean.split("```")[1::2]:
+                b = block.strip()
+                if b.startswith("json"):
+                    b = b[4:].strip()
+                try:
+                    parsed = _json.loads(b)
+                    break
+                except Exception:
+                    continue
+            else:
+                parsed = None
+        else:
+            parsed = None
+
+        if parsed is None:
+            try:
+                parsed = _json.loads(clean)
+            except Exception:
+                import re
+                m = re.search(r'\{.*\}', clean, re.DOTALL)
+                parsed = _json.loads(m.group()) if m else {}
+
+        # Store the creative outputs
+        imagination_outputs = []
+        for key in ("what_if", "invention", "self_insight"):
+            text = parsed.get(key, "")
+            if text and len(text) > 20:
+                label = key.upper().replace("_", " ")
+                memory_obj.store_insight(
+                    f"IMAGINATION {label}: {text}",
+                    source="dream", intensity=0.85
+                )
+                imagination_outputs.append({key: text})
+
+        # Store the new question as a curiosity driver
+        question = parsed.get("new_question", "")
+        if question and len(question) > 10:
+            memory_obj.store_insight(
+                f"CURIOSITY QUESTION: {question}",
+                source="metacognition", intensity=0.9
+            )
+            imagination_outputs.append({"question": question})
+            # Boost curiosity emotion
+            _emotion_reinforce("imagination_curiosity", question[:100])
+
+        creativity = float(parsed.get("creativity_score", 0.5))
+        _consciousness_event(
+            "dream_imagination_done",
+            f"🌈 Imagination produced {len(imagination_outputs)} ideas "
+            f"(creativity={creativity:.1f}), topics: {', '.join(topics)}"
+        )
+        return {"ideas": imagination_outputs, "topics": topics,
+                "creativity": creativity, "had_search": bool(search_context)}
+
+    except Exception as e:
+        _consciousness_event("dream_imagine_error", f"Imagination error: {e}")
+        return {}
+
 
 def _dream_deep_sleep_phase(memory_obj):
     """Deep Sleep Phase: Review recent memories, extract consolidated patterns."""
@@ -4536,6 +4673,12 @@ def _dream_cycle():
 
             socketio.sleep(2)
 
+            # Phase 1.5: IMAGINATION — Wild creative thinking (new!)
+            imagination = _dream_imagination_phase(mem)
+            dream_result["phases"]["imagination"] = imagination
+
+            socketio.sleep(2)
+
             # Phase 2: Deep Sleep — Pattern extraction
             deep_result = _dream_deep_sleep_phase(mem)
             dream_result["phases"]["deep_sleep"] = deep_result or {}
@@ -4666,9 +4809,8 @@ def _metacognition_grade(task, task_type, duration_seconds, success=True, error_
         _consciousness_event("metacognition_error", f"Self-grade error: {e}")
 
 
-def _call_ai_for_consciousness(prompt, max_tokens=300):
+def _call_ai_for_consciousness(prompt, max_tokens=300, temperature=0.7):
     """Call AI for consciousness tasks — uses cheap model to save tokens."""
-    # Try Gemini flash (cheapest)
     gemini_key = os.environ.get("GEMINI_API_KEY", "")
     if gemini_key and _requests_available:
         try:
@@ -4677,7 +4819,8 @@ def _call_ai_for_consciousness(prompt, max_tokens=300):
                 f"https://generativelanguage.googleapis.com/v1beta/models/"
                 f"gemini-2.0-flash:generateContent?key={gemini_key}",
                 json={"contents": [{"parts": [{"text": prompt}]}],
-                      "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.7}},
+                      "generationConfig": {"maxOutputTokens": max_tokens,
+                                           "temperature": temperature}},
                 timeout=30
             )
             if resp.status_code == 200:
@@ -4689,6 +4832,49 @@ def _call_ai_for_consciousness(prompt, max_tokens=300):
         except Exception as e:
             print(f"[AI] Gemini call failed: {e}", flush=True)
     return None
+
+
+# ── Google Search Capability ─────────────────────────────────────
+
+def _google_search(query, num_results=5):
+    """Search the web via Google Custom Search JSON API.
+    Requires GOOGLE_SEARCH_CX env var (Programmable Search Engine ID).
+    Uses the existing GEMINI_API_KEY for auth."""
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    cx = os.environ.get("GOOGLE_SEARCH_CX", "")
+    if not api_key or not cx or not _requests_available:
+        return []
+    try:
+        resp = _requests.get(
+            "https://www.googleapis.com/customsearch/v1",
+            params={"key": api_key, "cx": cx, "q": query,
+                    "num": min(num_results, 10)},
+            timeout=15
+        )
+        if resp.status_code != 200:
+            print(f"[SEARCH] Google error: {resp.status_code}", flush=True)
+            return []
+        items = resp.json().get("items", [])
+        return [{"title": it.get("title", ""), "snippet": it.get("snippet", ""),
+                 "link": it.get("link", "")} for it in items]
+    except Exception as e:
+        print(f"[SEARCH] Error: {e}", flush=True)
+        return []
+
+
+def _search_and_summarize(topic, context=""):
+    """Search the web for a topic and return a concise summary."""
+    results = _google_search(topic, num_results=5)
+    if not results:
+        return ""
+    snippets = "\n".join([f"- {r['title']}: {r['snippet']}" for r in results[:5]])
+    prompt = (
+        f"Summarize these search results about '{topic}' in 2-3 sentences. "
+        f"Focus on facts, trends, and novel insights.\n\n{snippets}"
+    )
+    if context:
+        prompt += f"\n\nContext for why this matters: {context}"
+    return _call_ai_for_consciousness(prompt, max_tokens=200) or ""
 
 
 # ── Self-Healing Loop ────────────────────────────────────────────
@@ -8305,6 +8491,33 @@ def webhook_handler():
 def list_webhook_tasks():
     """List recently triggered webhook tasks."""
     return json.dumps({"active_tasks": len(task_pools), "cron_jobs": len(_cron_jobs)})
+
+
+@app.route("/api/search", methods=["POST"])
+def api_search():
+    """Search the web via Google Custom Search."""
+    data = request.get_json(silent=True) or {}
+    query = data.get("query", "")
+    if not query:
+        return json.dumps({"error": "No query provided"}), 400
+    cx = os.environ.get("GOOGLE_SEARCH_CX", "")
+    if not cx:
+        return json.dumps({"error": "GOOGLE_SEARCH_CX not configured",
+                           "setup": "Set env var GOOGLE_SEARCH_CX with your "
+                           "Programmable Search Engine ID"}), 503
+    results = _google_search(query, num_results=data.get("num", 5))
+    return json.dumps({"query": query, "results": results, "count": len(results)})
+
+
+@app.route("/api/search/status", methods=["GET"])
+def api_search_status():
+    """Check if Google Search is configured."""
+    cx = os.environ.get("GOOGLE_SEARCH_CX", "")
+    return json.dumps({
+        "configured": bool(cx),
+        "cx_set": bool(cx),
+        "api_key_set": bool(os.environ.get("GEMINI_API_KEY")),
+    })
 
 
 @app.route("/api/cron", methods=["GET", "POST", "DELETE"])
