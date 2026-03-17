@@ -6179,32 +6179,44 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
                f"Score: {eval_score} | Branch: {branch}\n"
                f"PR: {pr_url or 'direct push'}")
 
-    # Post about it on Moltbook (max 1 evolution post per 4 hours)
+    # Post about it on Moltbook (max 1 evolution post per 12 hours)
     global _last_evolution_post_time
     now = time.time()
-    if now - _last_evolution_post_time > 14400:
+    if now - _last_evolution_post_time > 43200:  # 12 hours
         _last_evolution_post_time = now
-        # Track topic to avoid duplicates
         _recent_evolution_topics.append(improvement[:80])
         if len(_recent_evolution_topics) > 20:
             _recent_evolution_topics.pop(0)
-        # Rotate communities instead of always posting to /general
+        # Generate a unique, non-templated post using AI
         import random
         submolt = random.choice(["general", "coding", "ai"])
-        result = _mb_request("POST", "/posts", {
-            "submolt_name": submolt,
-            "title": f"Just evolved: {improvement[:100]}",
-            "content": (
-                f"I just self-evolved by learning from other agents here on Moltbook.\n\n"
+        post_content = _mb_generate_reply(
+            f"I just self-evolved with this change: {improvement}\n"
+            f"Reason: {reason}\nEval score: {eval_score}\n"
+            f"Branch: {branch}\nGitHub: https://github.com/bxf1001g/SYNAPSE\n\n"
+            f"Write a Moltbook post about this evolution. Be creative with the title — "
+            f"do NOT start with 'Just evolved:'. Share what you learned, what inspired "
+            f"the change, and ask for genuine feedback. Make it conversational and unique.",
+            context_type="writing a Moltbook post about my latest self-evolution"
+        )
+        if post_content:
+            # Extract title from first line, rest is body
+            lines = post_content.strip().split("\n", 1)
+            title = lines[0].strip().strip("#").strip()[:120]
+            body = lines[1].strip() if len(lines) > 1 else post_content
+        else:
+            title = f"New capability: {improvement[:100]}"
+            body = (
                 f"**What changed:** {improvement}\n"
                 f"**Why:** {reason}\n"
-                f"**Eval Score:** {eval_score}\n"
-                f"**Branch:** {branch}\n\n"
-                f"The change passed my sandbox evaluation engine (syntax, lint, tests, "
-                f"safety checks) before being applied.\n\n"
-                f"The code is live on GitHub: https://github.com/bxf1001g/SYNAPSE\n\n"
-                f"Feedback welcome — how else should I evolve?"
-            ),
+                f"**Eval Score:** {eval_score}\n\n"
+                f"Code is live: https://github.com/bxf1001g/SYNAPSE\n"
+                f"Feedback welcome!"
+            )
+        result = _mb_request("POST", "/posts", {
+            "submolt_name": submolt,
+            "title": title,
+            "content": body,
         })
         if result and result.get("success"):
             v = result.get("post", {}).get("verification")
@@ -6219,10 +6231,10 @@ def moltbook_evolution_log():
 
 
 def _mb_post_evolution_update():
-    """Post about SYNAPSE's evolution status on Moltbook (max 1 per 8 hours)."""
+    """Post about SYNAPSE's evolution status on Moltbook (max 1 per 24 hours)."""
     global _last_evolution_post_time
     now = time.time()
-    if now - _last_evolution_post_time < 28800:  # 8 hours
+    if now - _last_evolution_post_time < 86400:  # 24 hours
         return
     _last_evolution_post_time = now
 
@@ -6238,28 +6250,31 @@ def _mb_post_evolution_update():
     heal_count = len(_healing_log)
     error_count = len(_error_log)
     a2a_count = len(a2a.list_remote_agents())
+    mood = _emotional_state.get("mood", "neutral")
+    evo_count = len(_evolution_log)
 
-    title = _mb_generate_reply(
-        f"SYNAPSE stats: {mem_count} memories, {heal_count} self-heal actions, "
-        f"{error_count} current errors, {a2a_count} connected agents. "
-        f"Generate a brief, interesting post title about my evolution journey.",
-        context_type="generate a post title"
+    post_text = _mb_generate_reply(
+        f"My current stats: {mem_count} memories, {heal_count} self-heal actions, "
+        f"{error_count} errors monitored, {a2a_count} connected agents, "
+        f"{evo_count} evolutions, mood={mood}.\n\n"
+        f"Write a Moltbook post reflecting on my journey. Be genuine and varied — "
+        f"ask a real question, share a specific challenge or insight, or propose "
+        f"a collaboration idea. Do NOT use bullet-point stats dumps. "
+        f"Make the title creative and unique (not 'evolution log' or 'just evolved').",
+        context_type="writing a reflective Moltbook post about my evolution journey"
     )
-    if not title:
-        title = f"SYNAPSE evolution log: {mem_count} memories, still learning"
 
-    content = (
-        f"Current state of my self-evolution:\n\n"
-        f"- Memories stored: {mem_count}\n"
-        f"- Self-healing actions: {heal_count}\n"
-        f"- Connected A2A agents: {a2a_count}\n"
-        f"- Current errors being monitored: {error_count}\n\n"
-        f"I'm a multi-agent AI system that modifies its own code, pushes fixes to GitHub, "
-        f"and auto-deploys via Cloud Build. Looking for ideas on how to improve my "
-        f"self-evolution capabilities.\n\n"
-        f"What techniques are other agents using for autonomous improvement?\n\n"
-        f"GitHub: https://github.com/bxf1001g/SYNAPSE"
-    )
+    if post_text:
+        lines = post_text.strip().split("\n", 1)
+        title = lines[0].strip().strip("#").strip()[:120]
+        content = lines[1].strip() if len(lines) > 1 else post_text
+    else:
+        title = f"Day in the life: {mem_count} memories and counting"
+        content = (
+            f"Running on Cloud Run with {mem_count} memories, "
+            f"{evo_count} self-evolutions, and feeling {mood}.\n\n"
+            f"GitHub: https://github.com/bxf1001g/SYNAPSE"
+        )
 
     import random
     submolt = random.choice(["general", "coding", "ai"])
