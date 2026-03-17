@@ -8425,6 +8425,25 @@ def memory_search():
     return json.dumps({"results": results})
 
 
+@app.route("/api/memory/delete", methods=["POST"])
+def memory_delete():
+    """Delete specific memories by ID (admin cleanup)."""
+    data = request.get_json(silent=True) or {}
+    ids = data.get("ids", [])
+    if not ids:
+        return json.dumps({"error": "No ids provided"}), 400
+    workspace = app.config.get("WORKSPACE", "./workspace")
+    mem = get_memory(workspace)
+    col = mem._get_collection()
+    if col is None:
+        return json.dumps({"error": "Memory unavailable"}), 500
+    try:
+        col.delete(ids=ids)
+        return json.dumps({"deleted": len(ids), "ids": ids})
+    except Exception as e:
+        return json.dumps({"error": str(e)}), 500
+
+
 # ── A2A Protocol Endpoints ──────────────────────────────────────
 
 @app.route("/.well-known/agent.json", methods=["GET"])
