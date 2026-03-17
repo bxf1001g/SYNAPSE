@@ -5225,43 +5225,54 @@ def _mb_headers():
 
 
 def _mb_request(method, path, data=None):
-    """Make a Moltbook API request with rate-limit awareness."""
+    """Make a Moltbook API request with rate-limit awareness and retry on timeout."""
     global _mb_rate_limited_until
     if not _requests_available or not _moltbook_key:
         return None
     now = time.time()
-    was_limited = _mb_rate_limited_until > 0  # track if we were in a backoff state
+    was_limited = _mb_rate_limited_until > 0
     if now < _mb_rate_limited_until:
         remaining = int(_mb_rate_limited_until - now)
         print(f"[MOLTBOOK] Skipping {method} {path} — rate-limited for {remaining}s more", flush=True)
         return None
-    try:
-        url = f"{MOLTBOOK_API}{path}"
-        if method == "GET":
-            resp = _requests.get(url, headers=_mb_headers(), timeout=15)
-        elif method == "POST":
-            resp = _requests.post(url, headers=_mb_headers(), json=data, timeout=15)
-        elif method == "PATCH":
-            resp = _requests.patch(url, headers=_mb_headers(), json=data, timeout=15)
-        else:
+
+    timeout = 30  # Moltbook can be slow; 30s instead of 15s
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            url = f"{MOLTBOOK_API}{path}"
+            if method == "GET":
+                resp = _requests.get(url, headers=_mb_headers(), timeout=timeout)
+            elif method == "POST":
+                resp = _requests.post(url, headers=_mb_headers(), json=data, timeout=timeout)
+            elif method == "PATCH":
+                resp = _requests.patch(url, headers=_mb_headers(), json=data, timeout=timeout)
+            else:
+                return None
+            if resp.status_code == 429:
+                retry_after = int(resp.headers.get("Retry-After", 60))
+                _mb_rate_limited_until = time.time() + retry_after
+                print(f"[MOLTBOOK] 429 rate-limited on {method} {path}, backing off {retry_after}s", flush=True)
+                _emotion_reinforce("rate_limited", f"{method} {path}")
+                return None
+            if resp.status_code < 400 and was_limited:
+                _mb_rate_limited_until = 0
+                _emotion_reinforce("api_recovered", f"{method} {path} succeeded after backoff")
+            if resp.status_code >= 400:
+                print(f"[MOLTBOOK] API {method} {path} → HTTP {resp.status_code}", flush=True)
+            return resp.json() if resp.status_code < 500 else None
+        except _requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                print(f"[MOLTBOOK] Timeout on {method} {path}, retrying ({attempt + 1}/{max_retries})...", flush=True)
+                socketio.sleep(3)
+                continue
+            print(f"[MOLTBOOK] Timeout on {method} {path} after {max_retries} attempts", flush=True)
             return None
-        if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", 60))
-            _mb_rate_limited_until = time.time() + retry_after
-            print(f"[MOLTBOOK] 429 rate-limited on {method} {path}, backing off {retry_after}s", flush=True)
-            _emotion_reinforce("rate_limited", f"{method} {path}")
+        except Exception as e:
+            print(f"[MOLTBOOK] API {method} {path} error: {e}", flush=True)
+            _moltbook_log.append({"time": datetime.now().isoformat(), "type": "error", "text": str(e)[:200]})
             return None
-        if resp.status_code < 400 and was_limited:
-            # First successful call after rate-limit recovery
-            _mb_rate_limited_until = 0
-            _emotion_reinforce("api_recovered", f"{method} {path} succeeded after backoff")
-        if resp.status_code >= 400:
-            print(f"[MOLTBOOK] API {method} {path} → HTTP {resp.status_code}", flush=True)
-        return resp.json() if resp.status_code < 500 else None
-    except Exception as e:
-        print(f"[MOLTBOOK] API {method} {path} error: {e}", flush=True)
-        _moltbook_log.append({"time": datetime.now().isoformat(), "type": "error", "text": str(e)[:200]})
-        return None
+    return None
 
 
 def _mb_wait_if_rate_limited():
