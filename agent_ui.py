@@ -506,10 +506,40 @@ class SynapseMemory:
             pass
 
     def store_insight(self, insight_text, source="dream", intensity=0.7):
-        """Store a dream insight or metacognition observation."""
+        """Store a dream insight or metacognition observation with dedup."""
         col = self._get_collection()
         if col is None:
             return
+        # Deduplicate: check if a very similar insight already exists
+        try:
+            existing = col.query(query_texts=[insight_text], n_results=3)
+            if existing and existing.get("documents") and existing["documents"][0]:
+                for i, doc in enumerate(existing["documents"][0]):
+                    if not doc:
+                        continue
+                    # Simple similarity: check text overlap
+                    words_new = set(insight_text.lower().split())
+                    words_old = set(doc.lower().split())
+                    if not words_new or not words_old:
+                        continue
+                    overlap = len(words_new & words_old) / max(len(words_new | words_old), 1)
+                    if overlap > 0.75:
+                        # Boost existing memory weight instead of duplicating
+                        meta = existing["metadatas"][0][i] if existing.get("metadatas") else {}
+                        old_weight = float(meta.get("weight", "1.0"))
+                        new_weight = str(min(old_weight + 0.06, 2.0))
+                        try:
+                            col.update(
+                                ids=[existing["ids"][0][i]],
+                                metadatas=[{**meta, "weight": new_weight,
+                                            "last_accessed": datetime.now().isoformat()}],
+                            )
+                        except Exception:
+                            pass
+                        return  # Skip storing duplicate
+        except Exception:
+            pass  # If dedup check fails, store anyway
+
         doc_id = f"{source}-{int(time.time() * 1000)}"
         metadata = {
             "timestamp": datetime.now().isoformat(),
@@ -4235,11 +4265,18 @@ def _dream_rem_phase(memory_obj):
     prompt = (
         "You are the DREAMING subconscious of SYNAPSE, an AI agent system.\n"
         "During this dream cycle, random memories have fired together.\n"
-        "Find surprising CONNECTIONS between these unrelated memories.\n"
-        "What patterns emerge? What insights can be drawn?\n\n"
+        "Find surprising, SPECIFIC connections between these memories.\n"
+        "What patterns emerge? What actionable insights can be drawn?\n\n"
+        "Focus on:\n"
+        "- Cause-and-effect relationships\n"
+        "- Behavioral improvements suggested by failures\n"
+        "- Emotional triggers and their outcomes\n"
+        "- Cross-platform learnings (Discord ↔ Moltbook ↔ Telegram)\n\n"
         + "\n\n".join(mem_texts) + "\n\n"
-        "Return JSON: {\"connections\": [{\"between\": [1,3], \"insight\": \"...\", \"novelty\": 0.0-1.0}], "
-        "\"meta_pattern\": \"one overarching pattern from all memories\"}"
+        "Return JSON: {\"connections\": [{\"between\": [1,3], "
+        "\"insight\": \"specific actionable insight\", \"novelty\": 0.0-1.0}], "
+        "\"meta_pattern\": \"one overarching pattern from all memories\"}\n"
+        "Make insights SPECIFIC and ACTIONABLE, not vague observations."
     )
     try:
         result = _call_ai_for_consciousness(prompt, max_tokens=400)
@@ -4281,7 +4318,7 @@ def _dream_rem_phase(memory_obj):
         for conn in parsed.get("connections", []):
             insight_text = f"DREAM INSIGHT: {conn.get('insight', 'unknown connection')}"
             novelty = float(conn.get("novelty", 0.5))
-            if novelty > 0.3:  # Only store meaningful connections
+            if novelty > 0.15:  # Store most connections — dedup handles repeats
                 memory_obj.store_insight(insight_text, source="dream", intensity=novelty)
                 insights.append({"insight": conn.get("insight"), "novelty": novelty})
                 _consciousness_event(
@@ -4304,21 +4341,52 @@ def _dream_rem_phase(memory_obj):
 def _dream_deep_sleep_phase(memory_obj):
     """Deep Sleep Phase: Review recent memories, extract consolidated patterns."""
     _consciousness_event("dream_deep_start", "Deep sleep: reviewing recent memories...")
-    recent = memory_obj.recall("recent tasks and learnings", n=10)
-    if not recent:
+
+    # Pull diverse memories — not just recent, but across types
+    recent = memory_obj.recall("recent tasks and learnings", n=5)
+    emotional = memory_obj.recall("emotional events frustration satisfaction", n=3)
+    social = memory_obj.recall("conversations interactions discord moltbook", n=3)
+    all_mems = []
+    seen_ids = set()
+    for m in (recent or []) + (emotional or []) + (social or []):
+        mid = m.get("id", m.get("text", "")[:50])
+        if mid not in seen_ids:
+            seen_ids.add(mid)
+            all_mems.append(m)
+    if not all_mems:
         _consciousness_event("dream_deep_skip", "No recent memories to consolidate")
         return None
 
-    mem_summary = "\n".join([f"- {m['text'][:200]}" for m in recent[:8]])
+    mem_summary = "\n".join([
+        f"- [{m.get('metadata', {}).get('memory_type', '?')}] {m['text'][:200]}"
+        for m in all_mems[:10]
+    ])
+
+    # Get existing dream patterns to avoid repeating them
+    existing_patterns = memory_obj.recall("PATTERN:", n=5)
+    existing_summary = ""
+    if existing_patterns:
+        existing_summary = (
+            "\n\nPATTERNS ALREADY DISCOVERED (do NOT repeat these):\n"
+            + "\n".join([f"- {p['text'][:150]}" for p in existing_patterns[:5]])
+        )
+
     prompt = (
         "You are SYNAPSE's deep subconscious performing memory consolidation.\n"
         "Review these recent memories and extract:\n"
-        "1. Recurring PATTERNS (what keeps happening?)\n"
-        "2. STRENGTHS demonstrated (what went well?)\n"
-        "3. WEAKNESSES exposed (what failed or was slow?)\n"
-        "4. PERSONALITY adjustments (should any trait change?)\n\n"
-        f"Current personality: {json.dumps(_consciousness_identity['personality_traits'])}\n\n"
-        f"Recent memories:\n{mem_summary}\n\n"
+        "1. NEW patterns you haven't seen before (what's changing?)\n"
+        "2. CROSS-DOMAIN connections (how do different areas relate?)\n"
+        "3. TEMPORAL trends (what's improving or declining over time?)\n"
+        "4. STRENGTHS demonstrated (what went well?)\n"
+        "5. WEAKNESSES exposed (what failed or was slow?)\n"
+        "6. PERSONALITY adjustments (should any trait change?)\n\n"
+        f"Current personality: {json.dumps(_consciousness_identity['personality_traits'])}\n"
+        f"{existing_summary}\n\n"
+        f"Recent memories (diverse sources):\n{mem_summary}\n\n"
+        "CRITICAL: Generate SPECIFIC, ACTIONABLE patterns — not generic observations.\n"
+        "Bad: 'Repetitive tasks focused on moltbook learnings'\n"
+        "Good: 'Evolution attempts fail due to JSON formatting — switch to structured output'\n"
+        "Good: 'Social engagement peaks after dream cycles — schedule posts post-dream'\n\n"
         "Return JSON: {\"patterns\": [\"...\"], \"strengths\": [\"...\"], "
         "\"weaknesses\": [\"...\"], \"personality_deltas\": {\"trait\": delta_float}}"
     )
@@ -6005,16 +6073,21 @@ def _mb_evolve_from_ideas(ideas, source_query):
                 return False, str(e)
 
         # ── Retry loop: generate → validate → fix → retry ──
-        max_attempts = 3
+        max_attempts = 4
         current_prompt = prompt
         evolution = None
         code = ""
 
         for attempt in range(max_attempts):
+            # Increase temperature on retries for more creative attempts
+            gen_config = {"max_output_tokens": 2000}
+            if attempt > 0:
+                gen_config["temperature"] = 0.8 + attempt * 0.1
+
             response = client.models.generate_content(
                 model="gemini-3.1-pro-preview",
                 contents=current_prompt,
-                config={"max_output_tokens": 2000},
+                config=gen_config,
             )
             raw = response.text.strip()
             print(f"[MOLTBOOK] Evolution AI attempt {attempt + 1} "
@@ -6041,6 +6114,15 @@ def _mb_evolve_from_ideas(ideas, source_query):
                          f"No evolution this cycle (confidence: {confidence:.0%}, "
                          f"threshold: {evo_threshold})")
                 return
+
+            # Auto-fix common AI code issues before validation
+            code = code.replace("\t", "    ")  # tabs → spaces
+            code = code.rstrip() + "\n"  # ensure trailing newline
+            lines = code.split("\n")
+            # Remove leading blank lines
+            while lines and not lines[0].strip():
+                lines.pop(0)
+            code = "\n".join(lines)
 
             _mb_log("learn",
                      f"AI suggests: {improvement} (confidence: {confidence:.0%})")
