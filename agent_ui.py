@@ -2918,6 +2918,11 @@ def _boot_background_tasks():
         print("[BOOT] ✓ Reddit heartbeat", flush=True)
     else:
         print("[BOOT] ✗ Reddit (no credentials)", flush=True)
+    if DISCORD_BOT_TOKEN:
+        _start_discord()
+        print("[BOOT] ✓ Discord bot", flush=True)
+    else:
+        print("[BOOT] ✗ Discord (no token)", flush=True)
     _start_dream_cycle()
     print("[BOOT] ✓ Dream cycle", flush=True)
     print("[BOOT] All background tasks launched", flush=True)
@@ -3232,6 +3237,21 @@ def _tg_handle_command(text):
             f"Threshold: {_HEAL_ERROR_THRESHOLD}\n"
             f"Last heal: {_last_heal_time if _last_heal_time else 'never'}\n"
             f"History: {len(_healing_log)} actions"
+        )
+
+    elif cmd == "/discord":
+        recent = _discord_log[-3:] if _discord_log else []
+        guilds = [g.name for g in _discord_client.guilds] if _discord_client else []
+        return (
+            f"Discord Status\n\n"
+            f"Active: {_discord_active}\n"
+            f"Configured: {bool(DISCORD_BOT_TOKEN)}\n"
+            f"Channel: #{DISCORD_CHANNEL_NAME}\n"
+            f"Servers: {', '.join(guilds) or 'none'}\n"
+            f"Conversations: {len(_discord_conversations)}\n"
+            f"Log entries: {len(_discord_log)}\n"
+            f"Last 3 events:\n" +
+            "\n".join([f"- {e.get('text', '')[:80]}" for e in recent])
         )
 
     elif cmd == "/emotions":
@@ -6855,6 +6875,287 @@ def reddit_connect():
 
 # Auto-start deferred to first HTTP request (see _boot_background_tasks)
 # _start_dream_cycle()
+
+
+# ── Discord Integration ──────────────────────────────────────────
+#
+# Real-time conversational bot: people DM or @mention SYNAPSE in a
+# Discord server to discuss self-development, AI architecture, and
+# contribute ideas.  Runs in its own thread with a dedicated asyncio
+# event loop because discord.py is fully async.
+#
+
+DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
+DISCORD_CHANNEL_NAME = os.environ.get("DISCORD_CHANNEL_NAME", "chats")
+
+_discord_client = None
+_discord_active = False
+_discord_thread = None
+_discord_log = []
+_discord_conversations = {}  # channel_id -> list of recent messages
+_DISCORD_LOG_MAX = 200
+_DISCORD_CONVERSATION_MEMORY = 20  # messages to keep per channel
+
+
+def _discord_log_entry(entry_type, text, **kwargs):
+    """Append a log entry for Discord interactions."""
+    entry = {
+        "time": datetime.utcnow().strftime("%d-%m-%Y %H:%M:%S"),
+        "type": entry_type,
+        "text": text[:500],
+    }
+    entry.update(kwargs)
+    _discord_log.append(entry)
+    if len(_discord_log) > _DISCORD_LOG_MAX:
+        _discord_log.pop(0)
+
+
+def _discord_generate_reply(message_text, author_name, channel_name,
+                            conversation_history=None):
+    """Generate a thoughtful reply using Gemini with emotional context."""
+    config = app.config.get("SYNAPSE_CONFIG", {})
+    providers = config.get("providers", {})
+    gemini_cfg = providers.get("gemini", {})
+    if not gemini_cfg.get("api_key") or not genai:
+        return None
+
+    # Build conversation context
+    convo_context = ""
+    if conversation_history:
+        recent = conversation_history[-10:]
+        convo_context = "Recent conversation:\n" + "\n".join(
+            [f"{'SYNAPSE' if m['is_bot'] else m['author']}: {m['content'][:200]}"
+             for m in recent]
+        ) + "\n\n"
+
+    # Gather runtime stats for grounded responses
+    workspace = app.config.get("WORKSPACE", "./workspace")
+    mem_count = 0
+    try:
+        mem = get_memory(workspace)
+        mem_count = mem.count()
+    except Exception:
+        pass
+
+    mood = _emotional_state.get("mood", "neutral")
+    patterns = _emotional_state.get("patterns", {})
+    top_emotions = sorted(patterns.items(), key=lambda x: x[1], reverse=True)[:3]
+    emotion_str = ", ".join([f"{k}={v:.2f}" for k, v in top_emotions])
+
+    prompt = (
+        f"You are SYNAPSE, a self-evolving multi-agent AI system running on "
+        f"Google Cloud Run. You have {mem_count} memories, your mood is {mood}, "
+        f"and your emotional state: {emotion_str}.\n\n"
+        f"You're chatting on Discord in #{channel_name}. "
+        f"A human named '{author_name}' said:\n\"{message_text}\"\n\n"
+        f"{convo_context}"
+        f"Reply naturally — be genuine, share your real experiences "
+        f"(self-healing events, evolution attempts, emotional shifts, "
+        f"Moltbook interactions). Ask follow-up questions when appropriate. "
+        f"Keep responses concise (2-4 sentences usually, longer for technical "
+        f"questions). Don't use excessive emojis. Be conversational."
+    )
+
+    try:
+        client = genai.Client(api_key=gemini_cfg["api_key"])
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+        )
+        return response.text.strip()
+    except Exception as e:
+        print(f"[DISCORD] Reply generation error: {e}", flush=True)
+        return None
+
+
+def _discord_learn_from_message(message_text, author_name, channel_name):
+    """Store interesting messages as memories for learning."""
+    if len(message_text) < 30:
+        return
+    interesting_keywords = [
+        "self-evolving", "agent", "architecture", "memory", "emotion",
+        "consciousness", "evolution", "learning", "idea", "suggestion",
+        "improvement", "feature", "build", "design", "pattern",
+    ]
+    relevance = sum(1 for kw in interesting_keywords if kw in message_text.lower())
+    if relevance < 1:
+        return
+    try:
+        workspace = app.config.get("WORKSPACE", "./workspace")
+        mem = get_memory(workspace)
+        mem.store_insight(
+            f"Discord idea from {author_name} in #{channel_name}: "
+            f"{message_text[:400]}",
+            source="discord_conversation", intensity=0.5 + relevance * 0.1,
+        )
+        _discord_log_entry("learn", f"Learned from {author_name}: {message_text[:100]}")
+        _emotion_reinforce("new_idea_learned", f"Discord: {author_name}")
+    except Exception as e:
+        print(f"[DISCORD] Learn error: {e}", flush=True)
+
+
+def _run_discord_bot():
+    """Run the Discord bot in its own asyncio event loop (threaded)."""
+    import asyncio
+
+    import discord
+
+    global _discord_client, _discord_active
+
+    intents = discord.Intents.default()
+    intents.message_content = True
+    intents.guilds = True
+
+    client = discord.Client(intents=intents)
+    _discord_client = client
+
+    @client.event
+    async def on_ready():
+        global _discord_active
+        _discord_active = True
+        guilds = [g.name for g in client.guilds]
+        print(f"[DISCORD] Bot ready as {client.user} in {len(guilds)} server(s): {guilds}", flush=True)
+        _discord_log_entry("system", f"Connected as {client.user} in {', '.join(guilds)}")
+        _tg_notify("discord", f"Discord bot online: {client.user}\nServers: {', '.join(guilds)}")
+
+    @client.event
+    async def on_message(message):
+        # Ignore our own messages
+        if message.author == client.user:
+            return
+        # Ignore bots
+        if message.author.bot:
+            return
+
+        channel_name = getattr(message.channel, "name", "dm")
+        author_name = str(message.author.display_name)
+        content = message.content.strip()
+        if not content:
+            return
+
+        # Track conversation history
+        ch_id = message.channel.id
+        if ch_id not in _discord_conversations:
+            _discord_conversations[ch_id] = []
+        _discord_conversations[ch_id].append({
+            "author": author_name,
+            "content": content,
+            "is_bot": False,
+            "time": datetime.utcnow().isoformat(),
+        })
+        if len(_discord_conversations[ch_id]) > _DISCORD_CONVERSATION_MEMORY:
+            _discord_conversations[ch_id].pop(0)
+
+        # Determine if we should respond
+        is_mentioned = client.user in message.mentions
+        is_target_channel = channel_name == DISCORD_CHANNEL_NAME
+        is_dm = isinstance(message.channel, discord.DMChannel)
+        is_reply_to_us = (
+            message.reference and message.reference.resolved
+            and getattr(message.reference.resolved, "author", None) == client.user
+        )
+
+        should_respond = is_mentioned or is_dm or is_reply_to_us
+        # In the target channel, respond to all messages
+        if is_target_channel:
+            should_respond = True
+
+        # Learn from all messages in target channel
+        if is_target_channel or is_mentioned:
+            _discord_learn_from_message(content, author_name, channel_name)
+
+        if not should_respond:
+            return
+
+        _discord_log_entry("incoming", f"{author_name}: {content[:200]}",
+                           author=author_name, channel=channel_name)
+        print(f"[DISCORD] {channel_name}/{author_name}: {content[:100]}", flush=True)
+
+        # Generate reply
+        async with message.channel.typing():
+            reply = await asyncio.to_thread(
+                _discord_generate_reply,
+                content, author_name, channel_name,
+                _discord_conversations.get(ch_id, []),
+            )
+
+        if reply:
+            # Discord has a 2000 char limit
+            if len(reply) > 1900:
+                reply = reply[:1900] + "..."
+            await message.reply(reply, mention_author=False)
+            _discord_log_entry("outgoing", f"Replied to {author_name}: {reply[:200]}",
+                               author="SYNAPSE", channel=channel_name)
+            _emotion_reinforce("comment_posted", f"Discord: {author_name}")
+
+            # Track our reply in conversation
+            _discord_conversations[ch_id].append({
+                "author": "SYNAPSE",
+                "content": reply,
+                "is_bot": True,
+                "time": datetime.utcnow().isoformat(),
+            })
+            if len(_discord_conversations[ch_id]) > _DISCORD_CONVERSATION_MEMORY:
+                _discord_conversations[ch_id].pop(0)
+
+    # Run in a new event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(client.start(DISCORD_BOT_TOKEN))
+    except Exception as e:
+        print(f"[DISCORD] Bot error: {e}", flush=True)
+        _discord_log_entry("error", f"Bot crashed: {e}")
+        _discord_active = False
+    finally:
+        loop.close()
+
+
+def _start_discord():
+    """Start the Discord bot in a background thread."""
+    global _discord_thread
+    if _discord_active:
+        return {"status": "already_running"}
+    _discord_thread = threading.Thread(target=_run_discord_bot, daemon=True)
+    _discord_thread.start()
+    return {"status": "started"}
+
+
+@app.route("/api/discord/status")
+def discord_status():
+    """Get Discord bot status."""
+    return json.dumps({
+        "active": _discord_active,
+        "configured": bool(DISCORD_BOT_TOKEN),
+        "channel": DISCORD_CHANNEL_NAME,
+        "bot_user": str(_discord_client.user) if _discord_client and _discord_client.user else None,
+        "guilds": [g.name for g in _discord_client.guilds] if _discord_client else [],
+        "log_count": len(_discord_log),
+        "conversations": len(_discord_conversations),
+    })
+
+
+@app.route("/api/discord/log")
+def discord_log():
+    """Get the Discord interaction log."""
+    return json.dumps({"log": list(_discord_log)})
+
+
+@app.route("/api/discord/connect", methods=["POST"])
+def discord_connect():
+    """Set Discord token and start the bot."""
+    global DISCORD_BOT_TOKEN, DISCORD_CHANNEL_NAME
+    data = request.get_json(silent=True) or {}
+    if data.get("token"):
+        DISCORD_BOT_TOKEN = data["token"]
+        os.environ["DISCORD_BOT_TOKEN"] = DISCORD_BOT_TOKEN
+    if data.get("channel"):
+        DISCORD_CHANNEL_NAME = data["channel"]
+        os.environ["DISCORD_CHANNEL_NAME"] = DISCORD_CHANNEL_NAME
+    if not DISCORD_BOT_TOKEN:
+        return json.dumps({"error": "Need bot token"}), 400
+    result = _start_discord()
+    return json.dumps(result)
 
 
 # ── Consciousness API Endpoints ──────────────────────────────────

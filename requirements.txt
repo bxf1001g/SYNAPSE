@@ -27,3 +27,6 @@ gunicorn>=21.2
 
 # Reddit API
 praw>=7.7
+
+# Discord bot
+discord.py>=2.3
