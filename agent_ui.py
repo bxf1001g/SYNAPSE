@@ -3654,7 +3654,7 @@ _emotional_state = {
 _EMOTION_EVENT_MAP = {
     "evolution_success": {
         "reinforce": [("satisfaction", 0.12), ("confidence", 0.10), ("determination", 0.05)],
-        "weaken": [("frustration", 0.10), ("caution", 0.03)],
+        "weaken": [("frustration", 0.10), ("caution", 0.08)],
     },
     "evolution_fail_syntax": {
         "reinforce": [("frustration", 0.08), ("caution", 0.05)],
@@ -3681,8 +3681,8 @@ _EMOTION_EVENT_MAP = {
         "weaken": [("loneliness", 0.08)],
     },
     "new_idea_learned": {
-        "reinforce": [("curiosity", 0.10), ("determination", 0.04)],
-        "weaken": [("frustration", 0.03)],
+        "reinforce": [("curiosity", 0.10), ("determination", 0.04), ("confidence", 0.03)],
+        "weaken": [("frustration", 0.03), ("loneliness", 0.03)],
     },
     "self_heal_triggered": {
         "reinforce": [("caution", 0.06), ("determination", 0.08)],
@@ -3708,13 +3708,25 @@ _EMOTION_EVENT_MAP = {
         "reinforce": [("confidence", 0.05), ("satisfaction", 0.03)],
         "weaken": [("loneliness", 0.05)],
     },
+    "comment_posted": {
+        "reinforce": [("confidence", 0.04), ("satisfaction", 0.05)],
+        "weaken": [("loneliness", 0.06), ("caution", 0.02)],
+    },
     "git_push_success": {
         "reinforce": [("satisfaction", 0.10), ("confidence", 0.08)],
-        "weaken": [("frustration", 0.05), ("caution", 0.02)],
+        "weaken": [("frustration", 0.05), ("caution", 0.06)],
     },
     "git_push_fail": {
         "reinforce": [("frustration", 0.10), ("caution", 0.08)],
         "weaken": [("confidence", 0.06)],
+    },
+    "upvote_given": {
+        "reinforce": [("confidence", 0.02), ("satisfaction", 0.02)],
+        "weaken": [("loneliness", 0.03)],
+    },
+    "api_recovered": {
+        "reinforce": [("confidence", 0.04), ("satisfaction", 0.03)],
+        "weaken": [("caution", 0.05), ("frustration", 0.03)],
     },
 }
 
@@ -3798,10 +3810,15 @@ def _emotion_decay(decay_rate=0.02):
     """
     for name, pattern in _emotional_state["patterns"].items():
         old = pattern["strength"]
-        # Decay toward neutral (0.3) — emotions shouldn't fully zero out
         neutral = 0.3
+        # Caution and frustration decay faster to prevent permanent fear spirals
+        rate = decay_rate
+        if name in ("caution", "frustration") and pattern["strength"] > 0.7:
+            rate = decay_rate * 2.5  # 2.5x faster decay for extreme caution/frustration
+        elif name == "loneliness" and pattern["strength"] > 0.5:
+            rate = decay_rate * 1.5
         if pattern["strength"] > neutral:
-            pattern["strength"] = max(neutral, pattern["strength"] - decay_rate)
+            pattern["strength"] = max(neutral, pattern["strength"] - rate)
         elif pattern["strength"] < neutral:
             pattern["strength"] = min(neutral, pattern["strength"] + decay_rate * 0.5)
         pattern["decayed"] += 1
@@ -4355,8 +4372,10 @@ def _dream_cycle():
 
     while _dream_active:
         try:
-            print(f"[DREAM] Sleeping {_DREAM_INTERVAL}s until next dream...", flush=True)
-            socketio.sleep(_DREAM_INTERVAL)
+            # First dream fires sooner (5 min) so containers that restart often still dream
+            interval = 300 if not _emotional_state.get("mood_history") else _DREAM_INTERVAL
+            print(f"[DREAM] Sleeping {interval}s until next dream...", flush=True)
+            socketio.sleep(interval)
             if not _dream_active:
                 break
 
@@ -5189,8 +5208,8 @@ def _mb_request(method, path, data=None):
     global _mb_rate_limited_until
     if not _requests_available or not _moltbook_key:
         return None
-    # Skip all calls if we're in a rate-limit backoff window
     now = time.time()
+    was_limited = _mb_rate_limited_until > 0  # track if we were in a backoff state
     if now < _mb_rate_limited_until:
         remaining = int(_mb_rate_limited_until - now)
         print(f"[MOLTBOOK] Skipping {method} {path} — rate-limited for {remaining}s more", flush=True)
@@ -5211,6 +5230,10 @@ def _mb_request(method, path, data=None):
             print(f"[MOLTBOOK] 429 rate-limited on {method} {path}, backing off {retry_after}s", flush=True)
             _emotion_reinforce("rate_limited", f"{method} {path}")
             return None
+        if resp.status_code < 400 and was_limited:
+            # First successful call after rate-limit recovery
+            _mb_rate_limited_until = 0
+            _emotion_reinforce("api_recovered", f"{method} {path} succeeded after backoff")
         if resp.status_code >= 400:
             print(f"[MOLTBOOK] API {method} {path} → HTTP {resp.status_code}", flush=True)
         return resp.json() if resp.status_code < 500 else None
@@ -5602,6 +5625,7 @@ def _mb_engage_feed_post(post):
     print(f"[MOLTBOOK] Upvoting [{author}] {title[:60]}", flush=True)
     _mb_request("POST", f"/posts/{post_id}/upvote")
     _mb_log("action", f"Upvoted: {title[:100]}")
+    _emotion_reinforce("upvote_given", f"upvoted {author}")
 
     # Comment on relevant posts (~40% of the time for breadth)
     import random
@@ -5628,6 +5652,7 @@ def _mb_engage_feed_post(post):
                 if v:
                     _mb_solve_verification(v)
                 _mb_log("outgoing", f"Commented on [{author}] {title[:80]}: {reply_text[:300]}")
+                _emotion_reinforce("comment_posted", f"replied to {author}")
                 try:
                     ws = app.config.get("WORKSPACE", "./workspace")
                     mem = get_memory(ws)
@@ -5785,9 +5810,45 @@ def _mb_evolve_from_ideas(ideas, source_query):
 
         def _extract_json(text):
             """Try multiple strategies to extract JSON from LLM output."""
+            # Pre-process: fix unescaped newlines inside JSON string values
+            # Gemini often outputs code with literal newlines in "code" field
+            def _fix_newlines(s):
+                """Escape literal newlines/tabs inside JSON string values."""
+                result = []
+                in_string = False
+                escape = False
+                for ch in s:
+                    if escape:
+                        result.append(ch)
+                        escape = False
+                        continue
+                    if ch == "\\":
+                        result.append(ch)
+                        escape = True
+                        continue
+                    if ch == '"':
+                        in_string = not in_string
+                        result.append(ch)
+                        continue
+                    if in_string and ch == "\n":
+                        result.append("\\n")
+                        continue
+                    if in_string and ch == "\t":
+                        result.append("\\t")
+                        continue
+                    if in_string and ch == "\r":
+                        continue
+                    result.append(ch)
+                return "".join(result)
+
             # Strategy 1: direct parse
             try:
                 return _json.loads(text)
+            except Exception:
+                pass
+            # Strategy 1b: fix newlines then parse
+            try:
+                return _json.loads(_fix_newlines(text))
             except Exception:
                 pass
             # Strategy 2: strip markdown code fences
@@ -5798,6 +5859,10 @@ def _mb_evolve_from_ideas(ideas, source_query):
                         clean = clean[4:].strip()
                     try:
                         return _json.loads(clean)
+                    except Exception:
+                        pass
+                    try:
+                        return _json.loads(_fix_newlines(clean))
                     except Exception:
                         continue
             # Strategy 3: find first { ... } block via brace matching
@@ -5811,8 +5876,13 @@ def _mb_evolve_from_ideas(ideas, source_query):
                 elif ch == "}":
                     depth -= 1
                     if depth == 0 and start >= 0:
+                        candidate = text[start:i + 1]
                         try:
-                            return _json.loads(text[start:i + 1])
+                            return _json.loads(candidate)
+                        except Exception:
+                            pass
+                        try:
+                            return _json.loads(_fix_newlines(candidate))
                         except Exception:
                             start = -1
             return None
