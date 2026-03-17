@@ -8434,12 +8434,19 @@ def memory_delete():
         return json.dumps({"error": "No ids provided"}), 400
     workspace = app.config.get("WORKSPACE", "./workspace")
     mem = get_memory(workspace)
-    col = mem._get_collection()
-    if col is None:
-        return json.dumps({"error": "Memory unavailable"}), 500
     try:
-        col.delete(ids=ids)
-        return json.dumps({"deleted": len(ids), "ids": ids})
+        col = mem._get_collection()
+        if col is None:
+            return json.dumps({"error": "Memory collection unavailable"}), 500
+        # Delete in batches to avoid issues
+        deleted = 0
+        for doc_id in ids:
+            try:
+                col.delete(ids=[doc_id])
+                deleted += 1
+            except Exception as e:
+                print(f"[MEMORY] Failed to delete {doc_id}: {e}", flush=True)
+        return json.dumps({"deleted": deleted, "total_requested": len(ids)})
     except Exception as e:
         return json.dumps({"error": str(e)}), 500
 
