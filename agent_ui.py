@@ -3403,7 +3403,7 @@ def _tg_ai_respond(user_message):
         if gemini_cfg.get("api_key") and genai:
             client = genai.Client(api_key=gemini_cfg["api_key"])
             response = client.models.generate_content(
-                model="gemini-3.1-pro-preview",
+                model="gemini-2.0-flash",
                 contents=prompt,
                 config={"max_output_tokens": 2000},
             )
@@ -4577,7 +4577,7 @@ def _call_ai_for_consciousness(prompt, max_tokens=300):
             print("[AI] Calling Gemini for consciousness task...", flush=True)
             resp = _requests.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-3.1-pro-preview:generateContent?key={gemini_key}",
+                f"gemini-2.0-flash:generateContent?key={gemini_key}",
                 json={"contents": [{"parts": [{"text": prompt}]}],
                       "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.7}},
                 timeout=30
@@ -4599,7 +4599,7 @@ _healing_thread = None
 _healing_active = False
 _healing_log = []    # History of self-healing actions
 _HEALING_LOG_MAX = 20
-_HEAL_CHECK_INTERVAL = 900   # Check every 15 minutes
+_HEAL_CHECK_INTERVAL = 1800   # Check every 30 minutes (cost saving)
 _HEAL_ERROR_THRESHOLD = 5    # Trigger healing after N errors
 _HEAL_COOLDOWN = 1800        # 30 min cooldown between heal attempts
 
@@ -4770,7 +4770,7 @@ def _call_healer_ai(config, prompt):
         if gemini_cfg.get("api_key") and gemini_cfg.get("enabled") and genai:
             client = genai.Client(api_key=gemini_cfg["api_key"])
             response = client.models.generate_content(
-                model="gemini-3.1-pro-preview",
+                model="gemini-2.0-flash",
                 contents=prompt,
             )
             text = response.text.strip()
@@ -5006,7 +5006,7 @@ def inject_test_error():
 
 _pr_monitor_thread = None
 _pr_monitor_active = False
-_PR_CHECK_INTERVAL = 600  # Check every 10 min
+_PR_CHECK_INTERVAL = 1800  # Check every 30 min (cost saving)
 _pr_log = []
 _PR_LOG_MAX = 50
 _TRUSTED_PR_AUTHORS = {"copilot", "copilot[bot]", "copilot-swe-agent", "dependabot[bot]"}
@@ -5143,7 +5143,7 @@ def _auto_review_and_merge(repo, pr):
             try:
                 client = genai.Client(api_key=gemini_cfg["api_key"])
                 response = client.models.generate_content(
-                    model="gemini-3.1-pro-preview",
+                    model="gemini-2.0-flash",
                     contents=prompt,
                     config={"max_output_tokens": 150},
                 )
@@ -5236,7 +5236,7 @@ _MOLTBOOK_LOG_MAX = 100
 _moltbook_thread = None
 _moltbook_active = False
 _moltbook_lock = threading.Lock()  # Prevent duplicate heartbeat threads
-_MOLTBOOK_INTERVAL = 1800  # 30 min — reduced to avoid 429 rate limits
+_MOLTBOOK_INTERVAL = 3600  # 60 min — cost saving + avoid 429 rate limits
 _mb_rate_limited_until = 0  # Global rate-limit backoff timestamp
 
 
@@ -5360,7 +5360,7 @@ def _mb_solve_verification(verification):
             if gemini_cfg.get("api_key") and genai:
                 client = genai.Client(api_key=gemini_cfg["api_key"])
                 response = client.models.generate_content(
-                    model="gemini-3.1-pro-preview",
+                    model="gemini-2.0-flash",
                     contents=prompt,
                 )
                 raw_answer = response.text.strip()
@@ -6456,7 +6456,7 @@ def _mb_generate_reply(text, context_type="reply", author="someone"):
         if gemini_cfg.get("api_key") and genai:
             client = genai.Client(api_key=gemini_cfg["api_key"])
             response = client.models.generate_content(
-                model="gemini-3.1-pro-preview",
+                model="gemini-2.0-flash",
                 contents=prompt,
                 config={"max_output_tokens": 2000},
             )
@@ -6464,7 +6464,7 @@ def _mb_generate_reply(text, context_type="reply", author="someone"):
             # Clean up leading/trailing quotes
             if reply.startswith('"') and reply.endswith('"'):
                 reply = reply[1:-1]
-            return reply  # No truncation — let it speak fully
+            return reply
     except Exception as e:
         _mb_log("error", f"AI reply error: {e}")
     return None
@@ -6644,7 +6644,7 @@ Write a Reddit comment that:
 Reply with ONLY the comment text, no preamble."""
 
     try:
-        model_name = "gemini-3.1-pro-preview"
+        model_name = "gemini-2.0-flash"
         # Use cortex map if available
         reason_cfg = config.get("cortex_map", {}).get("reason", {})
         if reason_cfg.get("model"):
