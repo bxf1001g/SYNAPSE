@@ -6913,10 +6913,11 @@ def _discord_log_entry(entry_type, text, **kwargs):
 def _discord_generate_reply(message_text, author_name, channel_name,
                             conversation_history=None):
     """Generate a thoughtful reply using Gemini with emotional context."""
-    config = app.config.get("SYNAPSE_CONFIG", {})
-    providers = config.get("providers", {})
-    gemini_cfg = providers.get("gemini", {})
-    if not gemini_cfg.get("api_key") or not genai:
+    # Read API key from env directly — Discord runs in its own thread
+    # without Flask app context.
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key or not genai:
+        _discord_log_entry("error", "No Gemini API key for reply generation")
         return None
 
     # Build conversation context
@@ -6928,12 +6929,13 @@ def _discord_generate_reply(message_text, author_name, channel_name,
              for m in recent]
         ) + "\n\n"
 
-    # Gather runtime stats for grounded responses
-    workspace = app.config.get("WORKSPACE", "./workspace")
+    # Gather runtime stats — use env workspace, not Flask config
+    workspace = os.environ.get("WORKSPACE", "./workspace")
     mem_count = 0
     try:
-        mem = get_memory(workspace)
-        mem_count = mem.count()
+        with app.app_context():
+            mem = get_memory(workspace)
+            mem_count = mem.count()
     except Exception:
         pass
 
@@ -6957,7 +6959,7 @@ def _discord_generate_reply(message_text, author_name, channel_name,
     )
 
     try:
-        client = genai.Client(api_key=gemini_cfg["api_key"])
+        client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
             model="gemini-2.0-flash",
             contents=prompt,
@@ -6965,6 +6967,7 @@ def _discord_generate_reply(message_text, author_name, channel_name,
         return response.text.strip()
     except Exception as e:
         print(f"[DISCORD] Reply generation error: {e}", flush=True)
+        _discord_log_entry("error", f"Reply gen error: {e}")
         return None
 
 
@@ -6981,9 +6984,10 @@ def _discord_learn_from_message(message_text, author_name, channel_name):
     if relevance < 1:
         return
     try:
-        workspace = app.config.get("WORKSPACE", "./workspace")
-        mem = get_memory(workspace)
-        mem.store_insight(
+        workspace = os.environ.get("WORKSPACE", "./workspace")
+        with app.app_context():
+            mem = get_memory(workspace)
+            mem.store_insight(
             f"Discord idea from {author_name} in #{channel_name}: "
             f"{message_text[:400]}",
             source="discord_conversation", intensity=0.5 + relevance * 0.1,
