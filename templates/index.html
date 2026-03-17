@@ -1270,10 +1270,22 @@
         </div>
 
         <!-- Trigger Dream -->
-        <div style="margin-bottom:12px">
+        <div style="margin-bottom:12px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
             <button id="triggerDreamBtn" style="padding:6px 14px;background:rgba(168,85,247,0.2);border:1px solid rgba(168,85,247,0.4);border-radius:6px;color:#c084fc;cursor:pointer;font-size:0.75rem">💤 Trigger Dream Cycle</button>
-            <span id="dreamStatus" style="font-size:0.65rem;color:#888;margin-left:8px"></span>
+            <span id="dreamStatus" style="font-size:0.65rem;color:#888;margin-left:4px"></span>
         </div>
+
+        <!-- Brain Export / Import -->
+        <div style="color:#4ade80;font-size:0.75rem;margin-bottom:6px;font-weight:600">🧠 Brain (.synapse) — Export / Import / Merge</div>
+        <div style="margin-bottom:12px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+            <button id="exportBrainBtn" style="padding:6px 14px;background:rgba(34,197,94,0.2);border:1px solid rgba(34,197,94,0.4);border-radius:6px;color:#4ade80;cursor:pointer;font-size:0.75rem">💾 Export Brain</button>
+            <button id="importBrainBtn" style="padding:6px 14px;background:rgba(59,130,246,0.2);border:1px solid rgba(59,130,246,0.4);border-radius:6px;color:#60a5fa;cursor:pointer;font-size:0.75rem">📥 Import Brain</button>
+            <button id="mergeBrainBtn" style="padding:6px 14px;background:rgba(251,191,36,0.2);border:1px solid rgba(251,191,36,0.4);border-radius:6px;color:#fbbf24;cursor:pointer;font-size:0.75rem">🔀 Merge Brains</button>
+            <span id="brainStatus" style="font-size:0.65rem;color:#888;margin-left:4px"></span>
+        </div>
+        <input type="file" id="brainFileInput" accept=".synapse,.json" style="display:none">
+        <input type="file" id="mergeFileA" accept=".synapse,.json" style="display:none">
+        <input type="file" id="mergeFileB" accept=".synapse,.json" style="display:none">
 
         <!-- Recent Grades -->
         <div style="color:#fbbf24;font-size:0.75rem;margin-bottom:6px;font-weight:600">📊 Recent Self-Grades</div>
@@ -2148,6 +2160,136 @@
                 $('dreamStatus').textContent = d.status === 'dream_triggered' ? '💤 Dream started...' : 'Error';
                 $('dreamStatus').style.color = '#c084fc';
             }).catch(() => { $('dreamStatus').textContent = 'Failed'; });
+        });
+
+        // ── Brain Export / Import / Merge ──────────────
+        $('exportBrainBtn').addEventListener('click', () => {
+            $('brainStatus').textContent = 'Exporting brain...';
+            $('brainStatus').style.color = '#888';
+            fetch('/api/brain/export')
+                .then(r => r.json())
+                .then(data => {
+                    const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+                    a.download = 'synapse-brain-' + ts + '.synapse';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    $('brainStatus').textContent = '✅ Brain exported (' + (data.stats?.total_memories || 0) + ' memories)';
+                    $('brainStatus').style.color = '#4ade80';
+                    setTimeout(() => $('brainStatus').textContent = '', 5000);
+                })
+                .catch(e => {
+                    $('brainStatus').textContent = '❌ Export failed';
+                    $('brainStatus').style.color = '#f87171';
+                });
+        });
+
+        $('importBrainBtn').addEventListener('click', () => {
+            $('brainFileInput').click();
+        });
+        $('brainFileInput').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            $('brainStatus').textContent = 'Reading file...';
+            $('brainStatus').style.color = '#888';
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                try {
+                    const brain = JSON.parse(ev.target.result);
+                    if (brain.format !== '.synapse') {
+                        $('brainStatus').textContent = '❌ Not a valid .synapse file';
+                        $('brainStatus').style.color = '#f87171';
+                        return;
+                    }
+                    const mems = brain.memories?.length || 0;
+                    const name = brain.agent_name || 'Unknown';
+                    if (!confirm('Import brain from "' + name + '" with ' + mems + ' memories?\nMode: merge (blends with current brain)')) {
+                        $('brainStatus').textContent = '';
+                        return;
+                    }
+                    $('brainStatus').textContent = 'Importing...';
+                    fetch('/api/brain/import?mode=merge', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: ev.target.result
+                    }).then(r => r.json())
+                    .then(d => {
+                        $('brainStatus').textContent = '✅ Brain imported (' + (d.imported?.memories || 0) + ' memories merged)';
+                        $('brainStatus').style.color = '#60a5fa';
+                        refreshConsciousness();
+                        setTimeout(() => $('brainStatus').textContent = '', 5000);
+                    })
+                    .catch(() => {
+                        $('brainStatus').textContent = '❌ Import failed';
+                        $('brainStatus').style.color = '#f87171';
+                    });
+                } catch(err) {
+                    $('brainStatus').textContent = '❌ Invalid JSON file';
+                    $('brainStatus').style.color = '#f87171';
+                }
+            };
+            reader.readAsText(file);
+            e.target.value = '';
+        });
+
+        let _mergeDataA = null;
+        $('mergeBrainBtn').addEventListener('click', () => {
+            _mergeDataA = null;
+            $('brainStatus').textContent = 'Select first .synapse file...';
+            $('brainStatus').style.color = '#fbbf24';
+            $('mergeFileA').click();
+        });
+        $('mergeFileA').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) { $('brainStatus').textContent = ''; return; }
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                try {
+                    _mergeDataA = JSON.parse(ev.target.result);
+                    $('brainStatus').textContent = '✓ File A loaded — now select second .synapse file...';
+                    $('mergeFileB').click();
+                } catch(err) {
+                    $('brainStatus').textContent = '❌ Invalid JSON'; $('brainStatus').style.color = '#f87171';
+                }
+            };
+            reader.readAsText(file);
+            e.target.value = '';
+        });
+        $('mergeFileB').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file || !_mergeDataA) { $('brainStatus').textContent = ''; return; }
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                try {
+                    const brainB = JSON.parse(ev.target.result);
+                    $('brainStatus').textContent = 'Merging brains...';
+                    fetch('/api/brain/merge', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({brain_a: _mergeDataA, brain_b: brainB, strategy: 'equal'})
+                    }).then(r => r.json()).then(merged => {
+                        const blob = new Blob([JSON.stringify(merged, null, 2)], {type: 'application/json'});
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = 'synapse-merged-' + new Date().toISOString().slice(0,10) + '.synapse';
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        $('brainStatus').textContent = '✅ Merged! ' + (merged.stats?.total_memories || 0) + ' memories (deduped ' + (merged.stats?.deduped || 0) + ')';
+                        $('brainStatus').style.color = '#fbbf24';
+                        setTimeout(() => $('brainStatus').textContent = '', 5000);
+                    }).catch(() => {
+                        $('brainStatus').textContent = '❌ Merge failed'; $('brainStatus').style.color = '#f87171';
+                    });
+                } catch(err) {
+                    $('brainStatus').textContent = '❌ Invalid JSON'; $('brainStatus').style.color = '#f87171';
+                }
+            };
+            reader.readAsText(file);
+            e.target.value = '';
         });
 
         function refreshConsciousness() {
