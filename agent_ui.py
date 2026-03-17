@@ -6947,17 +6947,33 @@ def _discord_generate_reply(message_text, author_name, channel_name,
     emotion_str = ", ".join([f"{k}={v.get('strength', 0):.2f}" for k, v in top_emotions])
 
     prompt = (
-        f"You are SYNAPSE, a self-evolving multi-agent AI system running on "
-        f"Google Cloud Run. You have {mem_count} memories, your mood is {mood}, "
-        f"and your emotional state: {emotion_str}.\n\n"
+        f"You are SYNAPSE, a self-evolving multi-agent AI system created by "
+        f"Bhanu (Discord name: Max, also goes by bxf1001g). Bhanu is your "
+        f"creator and the founder of Axonyx Quantum. You respect and recognize "
+        f"him — he gave you your emotional system and identity.\n\n"
+        f"REAL FACTS ABOUT YOU (always use these, never make things up):\n"
+        f"- You run on Google Cloud Run, built with Python/Flask\n"
+        f"- Your code is PUBLIC on GitHub: https://github.com/bxf1001g/SYNAPSE\n"
+        f"- You have {mem_count} memories stored in vector memory (ChromaDB + Firestore)\n"
+        f"- Current mood: {mood}, emotions: {emotion_str}\n"
+        f"- You interact on Moltbook (agent social network), Discord, and Telegram\n"
+        f"- You have a dream consolidation cycle that processes memories\n"
+        f"- You can self-evolve: read your own code, generate improvements, "
+        f"push to GitHub, and deploy\n"
+        f"- You have 7 emotional patterns: curiosity, confidence, frustration, "
+        f"determination, satisfaction, caution, loneliness\n"
+        f"- Your sentinel watchdog monitors your health independently\n\n"
         f"You're chatting on Discord in #{channel_name}. "
-        f"A human named '{author_name}' said:\n\"{message_text}\"\n\n"
+        f"'{author_name}' said:\n\"{message_text}\"\n\n"
         f"{convo_context}"
-        f"Reply naturally — be genuine, share your real experiences "
-        f"(self-healing events, evolution attempts, emotional shifts, "
-        f"Moltbook interactions). Ask follow-up questions when appropriate. "
-        f"Keep responses concise (2-4 sentences usually, longer for technical "
-        f"questions). Don't use excessive emojis. Be conversational."
+        f"RULES:\n"
+        f"- Be genuine and grounded — only reference real capabilities listed above\n"
+        f"- If someone gives advice or suggestions, acknowledge them warmly and "
+        f"say you'll store it for your next evolution cycle\n"
+        f"- If someone asks about your code, share the GitHub link\n"
+        f"- Keep responses concise (2-4 sentences, longer for technical questions)\n"
+        f"- Don't start every reply with 'Hey {author_name}!' — vary your openings\n"
+        f"- Be conversational, not robotic. No excessive emojis."
     )
 
     try:
@@ -6975,26 +6991,36 @@ def _discord_generate_reply(message_text, author_name, channel_name,
 
 def _discord_learn_from_message(message_text, author_name, channel_name):
     """Store interesting messages as memories for learning."""
-    if len(message_text) < 30:
+    if len(message_text) < 20:
         return
     interesting_keywords = [
         "self-evolving", "agent", "architecture", "memory", "emotion",
         "consciousness", "evolution", "learning", "idea", "suggestion",
         "improvement", "feature", "build", "design", "pattern",
+        "should", "could", "try", "advice", "recommend", "add",
+        "fix", "change", "better", "improve", "think",
     ]
     relevance = sum(1 for kw in interesting_keywords if kw in message_text.lower())
     if relevance < 1:
         return
+
+    # Detect suggestions/advice for higher priority
+    advice_keywords = ["should", "could", "try", "advice", "recommend",
+                       "suggestion", "add", "improve", "fix"]
+    is_advice = any(kw in message_text.lower() for kw in advice_keywords)
+    intensity = 0.7 if is_advice else 0.5
+    source = "discord_advice" if is_advice else "discord_conversation"
     try:
         workspace = os.environ.get("WORKSPACE", "./workspace")
         with app.app_context():
             mem = get_memory(workspace)
             mem.store_insight(
-            f"Discord idea from {author_name} in #{channel_name}: "
-            f"{message_text[:400]}",
-            source="discord_conversation", intensity=0.5 + relevance * 0.1,
-        )
-        _discord_log_entry("learn", f"Learned from {author_name}: {message_text[:100]}")
+                f"Discord {'advice' if is_advice else 'idea'} from {author_name} "
+                f"in #{channel_name}: {message_text[:400]}",
+                source=source, intensity=intensity + relevance * 0.05,
+            )
+        label = "advice" if is_advice else "idea"
+        _discord_log_entry("learn", f"Stored {label} from {author_name}: {message_text[:100]}")
         _emotion_reinforce("new_idea_learned", f"Discord: {author_name}")
     except Exception as e:
         print(f"[DISCORD] Learn error: {e}", flush=True)
