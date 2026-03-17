@@ -724,10 +724,40 @@ class FirestoreMemory:
             pass
 
     def store_insight(self, insight_text, source="dream", intensity=0.7):
-        """Store a dream insight or observation."""
+        """Store a dream insight or observation with dedup."""
         col = self._col()
         if col is None:
             return
+        # Deduplicate: check recent memories of same type for overlap
+        try:
+            existing = (col.where("memory_type", "==", source)
+                        .order_by("weight", direction=_firestore_mod.Query.DESCENDING)
+                        .limit(10).stream())
+            words_new = set(insight_text.lower().split())
+            for doc in existing:
+                data = doc.to_dict()
+                old_text = data.get("text", "")
+                if not old_text:
+                    continue
+                words_old = set(old_text.lower().split())
+                if not words_new or not words_old:
+                    continue
+                overlap = len(words_new & words_old) / max(len(words_new | words_old), 1)
+                if overlap > 0.75:
+                    # Boost existing weight instead of duplicating
+                    old_weight = float(data.get("weight", 1.0))
+                    new_weight = min(old_weight + 0.06, 2.0)
+                    try:
+                        col.document(doc.id).update({
+                            "weight": new_weight,
+                            "last_accessed": datetime.now().isoformat(),
+                        })
+                    except Exception:
+                        pass
+                    return  # Skip storing duplicate
+        except Exception:
+            pass  # If dedup check fails, store anyway
+
         doc_id = f"{source}-{int(time.time() * 1000)}"
         try:
             col.document(doc_id).set({
@@ -8435,18 +8465,29 @@ def memory_delete():
     workspace = app.config.get("WORKSPACE", "./workspace")
     mem = get_memory(workspace)
     try:
-        col = mem._get_collection()
+        # Support both FirestoreMemory (_col) and local Memory (_get_collection)
+        col = None
+        if hasattr(mem, "_col"):
+            col = mem._col()
+        elif hasattr(mem, "_get_collection"):
+            col = mem._get_collection()
         if col is None:
             return json.dumps({"error": "Memory collection unavailable"}), 500
-        # Delete in batches to avoid issues
         deleted = 0
+        errors = []
         for doc_id in ids:
             try:
-                col.delete(ids=[doc_id])
+                if hasattr(col, "document"):
+                    col.document(doc_id).delete()
+                else:
+                    col.delete(ids=[doc_id])
                 deleted += 1
             except Exception as e:
-                print(f"[MEMORY] Failed to delete {doc_id}: {e}", flush=True)
-        return json.dumps({"deleted": deleted, "total_requested": len(ids)})
+                errors.append(f"{doc_id}: {e}")
+        result = {"deleted": deleted, "total_requested": len(ids)}
+        if errors:
+            result["errors"] = errors
+        return json.dumps(result)
     except Exception as e:
         return json.dumps({"error": str(e)}), 500
 
