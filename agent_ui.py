@@ -3478,7 +3478,7 @@ def _tg_ai_respond(user_message):
 
 
 def _tg_process_command(text):
-    """Process a single Telegram command in its own greenlet (non-blocking)."""
+    """Process a single Telegram command in its own thread (non-blocking)."""
     try:
         response = _tg_handle_command(text)
         if response:
@@ -3576,7 +3576,8 @@ def _tg_poll_loop():
 
                 if text:
                     _tg_log_event("in", text[:100])
-                    # Process command in separate greenlet to avoid blocking poll
+                    print(f"[TG] Dispatching command: {text[:50]!r} age={age:.0f}s", flush=True)
+                    # Process command in separate thread to avoid blocking poll
                     socketio.start_background_task(
                         _tg_process_command, text
                     )
