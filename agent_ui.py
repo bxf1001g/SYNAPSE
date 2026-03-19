@@ -93,6 +93,15 @@ except ImportError:
 import hashlib as _hashlib  # noqa: E402
 import uuid as _uuid  # noqa: E402
 
+# Hardware Controller (Jetson/RPi — camera, servo, sensors)
+_hardware_available = False
+_hw_controller = None
+try:
+    from hardware import HardwareController
+    _hardware_available = True
+except ImportError:
+    HardwareController = None
+
 # ── A2A Protocol (Agent-to-Agent Interoperability) ──────────────
 
 class A2AProtocol:
@@ -1936,11 +1945,12 @@ class AgentEngine:
         ws_listing = "\n".join(files_info) or "(empty)"
 
         system_prompt = (
-            "You are a helpful AI with FULL access to a local Windows 11 machine.\n"
+            "You are a helpful AI with FULL access to a local machine.\n"
             "You can run ANY command, create ANY script, install ANY package.\n"
             "You can generate IMAGES using the 'image' action.\n"
             "You can BROWSE the web using the 'browse' action to fetch live data.\n"
-            "You can use GITHUB API using the 'github' action.\n\n"
+            "You can use GITHUB API using the 'github' action.\n"
+            "You have HARDWARE ACCESS for camera, servos, motors, sensors, and GPIO.\n\n"
             f"WORKSPACE: {self.workspace}\n\n"
             "RESPOND WITH ONLY JSON:\n"
             '{"thinking": "...", "actions": [\n'
@@ -1949,11 +1959,21 @@ class AgentEngine:
             '  {"type": "image", "prompt": "detailed description", "save_as": "file.png"},\n'
             '  {"type": "browse", "url": "https://example.com"},\n'
             '  {"type": "github", "operation": "list_issues", "repo": "user/repo"},\n'
+            '  {"type": "camera", "filename": "photo.jpg"},\n'
+            '  {"type": "servo", "channel": 0, "angle": 90},\n'
+            '  {"type": "motor", "channel": 0, "speed": 0.5},\n'
+            '  {"type": "sensor", "sensor_type": "distance"},\n'
+            '  {"type": "observe"},\n'
+            '  {"type": "gpio", "pin": 18, "mode": "read"},\n'
             '  {"type": "answer", "content": "final answer to user"}\n'
             "]}\n\n"
             "ALWAYS end with an 'answer' action. Use scripts/commands for live data.\n"
-            "Use 'browse' action to fetch web pages, APIs, weather, news, etc.\n"
-            "Use 'image' action if asked for visual content.\n"
+            "Use 'observe' to capture camera + all sensors at once.\n"
+            "Use 'camera' to capture a single image for analysis.\n"
+            "Use 'servo' to move servo motors (angle 0-180).\n"
+            "Use 'motor' for continuous rotation (speed -1.0 to 1.0).\n"
+            "Use 'sensor' for distance/temperature/imu/light readings.\n"
+            "Use 'gpio' for direct pin read/write.\n"
             "Install packages first if needed (pip install requests)."
         )
 
@@ -2004,6 +2024,30 @@ class AgentEngine:
                             cmd_output += out + "\n"
                     elif atype == "github":
                         out = self._do_github(action, "system")
+                        if out:
+                            cmd_output += out + "\n"
+                    elif atype == "camera":
+                        out = self._do_camera(action, "system")
+                        if out:
+                            cmd_output += out + "\n"
+                    elif atype == "servo":
+                        out = self._do_servo(action, "system")
+                        if out:
+                            cmd_output += out + "\n"
+                    elif atype == "motor":
+                        out = self._do_motor(action, "system")
+                        if out:
+                            cmd_output += out + "\n"
+                    elif atype == "sensor":
+                        out = self._do_sensor(action, "system")
+                        if out:
+                            cmd_output += out + "\n"
+                    elif atype == "observe":
+                        out = self._do_observe(action, "system")
+                        if out:
+                            cmd_output += out + "\n"
+                    elif atype == "gpio":
+                        out = self._do_gpio(action, "system")
                         if out:
                             cmd_output += out + "\n"
                     elif atype == "answer":
@@ -2352,6 +2396,30 @@ class AgentEngine:
                         cmd_results.append(out)
                 elif atype == "github":
                     out = self._do_github(action, agent)
+                    if out:
+                        cmd_results.append(out)
+                elif atype == "camera":
+                    out = self._do_camera(action, agent)
+                    if out:
+                        cmd_results.append(out)
+                elif atype == "servo":
+                    out = self._do_servo(action, agent)
+                    if out:
+                        cmd_results.append(out)
+                elif atype == "motor":
+                    out = self._do_motor(action, agent)
+                    if out:
+                        cmd_results.append(out)
+                elif atype == "sensor":
+                    out = self._do_sensor(action, agent)
+                    if out:
+                        cmd_results.append(out)
+                elif atype == "observe":
+                    out = self._do_observe(action, agent)
+                    if out:
+                        cmd_results.append(out)
+                elif atype == "gpio":
+                    out = self._do_gpio(action, agent)
                     if out:
                         cmd_results.append(out)
                 elif atype == "message":
@@ -2912,6 +2980,153 @@ class AgentEngine:
                 "output": str(e), "exit_code": -1,
             })
             return f"GitHub {op}: ERROR: {e}"
+
+    # ── Hardware Actions (Camera, Servo, Sensor) ────────────────
+
+    def _get_hardware(self):
+        """Get or create hardware controller."""
+        global _hw_controller
+        if _hw_controller is None and _hardware_available:
+            _hw_controller = HardwareController(workspace=self.workspace)
+        return _hw_controller
+
+    def _do_camera(self, action, agent):
+        """Capture image from camera."""
+        hw = self._get_hardware()
+        if not hw:
+            return "Hardware module not available. Run: pip install opencv-python"
+
+        filename = action.get("filename", f"capture_{int(time.time())}.jpg")
+        self.emit("command_start", {"agent": agent, "cmd": f"📷 camera capture → {filename}"})
+
+        result = hw.capture_image(filename)
+        if result.get("success"):
+            output = f"Captured {result['width']}x{result['height']} image → {result['filepath']}"
+            self.emit("command_output", {
+                "agent": agent, "cmd": "camera",
+                "output": output, "exit_code": 0,
+            })
+            # Store base64 so vision model can analyze it
+            self._last_capture = result
+            return output
+        else:
+            err = result.get("error", "Unknown camera error")
+            self.emit("command_output", {
+                "agent": agent, "cmd": "camera",
+                "output": err, "exit_code": 1,
+            })
+            return f"Camera error: {err}"
+
+    def _do_servo(self, action, agent):
+        """Move servo motor."""
+        hw = self._get_hardware()
+        if not hw:
+            return "Hardware module not available. Install: pip install adafruit-servokit"
+
+        channel = int(action.get("channel", 0))
+        angle = int(action.get("angle", 90))
+        self.emit("command_start", {
+            "agent": agent, "cmd": f"🦾 servo ch{channel} → {angle}°",
+        })
+
+        result = hw.move_servo(channel=channel, angle=angle)
+        if result.get("success"):
+            output = f"Servo channel {channel} moved to {angle}°"
+            self.emit("command_output", {
+                "agent": agent, "cmd": "servo",
+                "output": output, "exit_code": 0,
+            })
+            return output
+        else:
+            err = result.get("error", "Servo error")
+            self.emit("command_output", {
+                "agent": agent, "cmd": "servo",
+                "output": err, "exit_code": 1,
+            })
+            return f"Servo error: {err}"
+
+    def _do_motor(self, action, agent):
+        """Control continuous rotation motor."""
+        hw = self._get_hardware()
+        if not hw:
+            return "Hardware module not available"
+
+        channel = int(action.get("channel", 0))
+        speed = float(action.get("speed", 0.0))
+        self.emit("command_start", {
+            "agent": agent, "cmd": f"⚙ motor ch{channel} speed={speed}",
+        })
+
+        if action.get("stop_all"):
+            result = hw.stop_all_motors()
+        else:
+            result = hw.set_motor_speed(channel=channel, speed=speed)
+
+        if result.get("success"):
+            output = f"Motor channel {channel}: speed={speed}"
+            self.emit("command_output", {
+                "agent": agent, "cmd": "motor",
+                "output": output, "exit_code": 0,
+            })
+            return output
+        return f"Motor error: {result.get('error', 'unknown')}"
+
+    def _do_sensor(self, action, agent):
+        """Read sensor data."""
+        hw = self._get_hardware()
+        if not hw:
+            return "Hardware module not available"
+
+        sensor_type = action.get("sensor_type", "temperature")
+        pin = action.get("pin")
+        self.emit("command_start", {
+            "agent": agent, "cmd": f"📡 sensor read: {sensor_type}",
+        })
+
+        result = hw.read_sensor(
+            sensor_type=sensor_type, pin=int(pin) if pin else None,
+            trigger_pin=action.get("trigger_pin"),
+            echo_pin=action.get("echo_pin"),
+        )
+        output = json.dumps(result, indent=2)
+        self.emit("command_output", {
+            "agent": agent, "cmd": f"sensor:{sensor_type}",
+            "output": output, "exit_code": 0 if result.get("success") else 1,
+        })
+        return f"Sensor ({sensor_type}): {output}"
+
+    def _do_observe(self, action, agent):
+        """Full observation: camera + all sensors at once."""
+        hw = self._get_hardware()
+        if not hw:
+            return "Hardware module not available"
+
+        self.emit("command_start", {"agent": agent, "cmd": "👁 full observation"})
+        obs = hw.observe()
+        description = hw.describe_observation(obs)
+        self.emit("command_output", {
+            "agent": agent, "cmd": "observe",
+            "output": description, "exit_code": 0,
+        })
+        self._last_observation = obs
+        return f"Observation:\n{description}"
+
+    def _do_gpio(self, action, agent):
+        """Direct GPIO read/write."""
+        hw = self._get_hardware()
+        if not hw:
+            return "Hardware module not available"
+
+        pin = int(action.get("pin", 0))
+        mode = action.get("mode", "read")
+        value = action.get("value", 0)
+
+        if mode == "write":
+            result = hw.gpio_write(pin, int(value))
+            return f"GPIO pin {pin} → {'HIGH' if value else 'LOW'}: {result}"
+        else:
+            result = hw.gpio_read(pin)
+            return f"GPIO pin {pin} = {result.get('value', 'error')}: {result}"
 
     def _cleanup(self):
         project = set(
@@ -8665,6 +8880,97 @@ def council_ask():
         "council_log": log,
         "models_used": [e["model"] for e in log],
     })
+
+
+# ── Hardware API ────────────────────────────────────────────────
+
+@app.route("/api/hardware/status")
+def hardware_status():
+    """Return hardware availability and connected devices."""
+    if not _hardware_available:
+        return json.dumps({
+            "available": False,
+            "error": "hardware.py module not found",
+            "install_hints": ["pip install opencv-python adafruit-servokit Jetson.GPIO"],
+        })
+    global _hw_controller
+    if _hw_controller is None:
+        ws = app.config.get("WORKSPACE", "./workspace")
+        _hw_controller = HardwareController(workspace=ws)
+    return json.dumps({"available": True, **_hw_controller.status()})
+
+
+@app.route("/api/hardware/capture", methods=["POST"])
+def hardware_capture():
+    """Capture camera image."""
+    if not _hardware_available:
+        return json.dumps({"success": False, "error": "Hardware not available"}), 400
+    global _hw_controller
+    if _hw_controller is None:
+        ws = app.config.get("WORKSPACE", "./workspace")
+        _hw_controller = HardwareController(workspace=ws)
+    data = request.get_json(silent=True) or {}
+    result = _hw_controller.capture_image(data.get("filename", "capture.jpg"))
+    # Don't send base64 in API response (too large) — just metadata
+    result.pop("base64", None)
+    return json.dumps(result)
+
+
+@app.route("/api/hardware/servo", methods=["POST"])
+def hardware_servo():
+    """Move servo to angle."""
+    if not _hardware_available:
+        return json.dumps({"success": False, "error": "Hardware not available"}), 400
+    global _hw_controller
+    if _hw_controller is None:
+        ws = app.config.get("WORKSPACE", "./workspace")
+        _hw_controller = HardwareController(workspace=ws)
+    data = request.get_json()
+    return json.dumps(_hw_controller.move_servo(
+        channel=int(data.get("channel", 0)),
+        angle=int(data.get("angle", 90)),
+    ))
+
+
+@app.route("/api/hardware/sensor", methods=["POST"])
+def hardware_sensor():
+    """Read sensor value."""
+    if not _hardware_available:
+        return json.dumps({"success": False, "error": "Hardware not available"}), 400
+    global _hw_controller
+    if _hw_controller is None:
+        ws = app.config.get("WORKSPACE", "./workspace")
+        _hw_controller = HardwareController(workspace=ws)
+    data = request.get_json()
+    return json.dumps(_hw_controller.read_sensor(
+        sensor_type=data.get("sensor_type", "temperature"),
+        pin=data.get("pin"),
+    ))
+
+
+@app.route("/api/hardware/observe", methods=["POST"])
+def hardware_observe():
+    """Full observation: camera + all sensors."""
+    if not _hardware_available:
+        return json.dumps({"success": False, "error": "Hardware not available"}), 400
+    global _hw_controller
+    if _hw_controller is None:
+        ws = app.config.get("WORKSPACE", "./workspace")
+        _hw_controller = HardwareController(workspace=ws)
+    obs = _hw_controller.observe()
+    desc = _hw_controller.describe_observation(obs)
+    # Remove large base64 data from response
+    if "image" in obs:
+        obs["image"].pop("base64", None)
+    return json.dumps({"observation": obs, "description": desc})
+
+
+@app.route("/api/hardware/stop", methods=["POST"])
+def hardware_stop():
+    """Emergency stop all motors."""
+    if _hw_controller:
+        return json.dumps(_hw_controller.stop_all_motors())
+    return json.dumps({"success": True, "stopped": []})
 
 
 # ── Webhook / Event-Driven API ──────────────────────────────────
