@@ -1122,6 +1122,15 @@ class NeuralCortex:
         client = self._get_provider_client(provider_type)
         return provider_type, model, client
 
+    def get_cortex_model(self, cortex_id):
+        """Get the configured model name for a cortex (for UI display)."""
+        cortex_map = self.config.get("cortex_map", {})
+        mapping = cortex_map.get(cortex_id, {})
+        return mapping.get(
+            "model",
+            CORTEX_MODELS.get(cortex_id, {}).get("model", "unknown"),
+        )
+
     def reset_clients(self):
         """Clear cached clients (e.g. after settings change)."""
         with self._lock:
@@ -1665,7 +1674,7 @@ class AgentEngine:
             "id": cortex_id,
             "label": cortex_info["label"],
             "desc": cortex_info["desc"],
-            "model": cortex_info["model"],
+            "model": self.cortex.get_cortex_model(cortex_id),
             "color": cortex_info["color"],
         })
 
@@ -1934,7 +1943,7 @@ class AgentEngine:
             "id": "reason",
             "label": CORTEX_MODELS["reason"]["label"],
             "desc": "Planning architecture...",
-            "model": CORTEX_MODELS["reason"]["model"],
+            "model": self.cortex.get_cortex_model("reason"),
             "color": CORTEX_MODELS["reason"]["color"],
         })
 
@@ -1944,7 +1953,7 @@ class AgentEngine:
             "id": "create",
             "label": CORTEX_MODELS["create"]["label"],
             "desc": "Ready to build...",
-            "model": CORTEX_MODELS["create"]["model"],
+            "model": self.cortex.get_cortex_model("create"),
             "color": CORTEX_MODELS["create"]["color"],
         })
 
@@ -1967,7 +1976,7 @@ class AgentEngine:
                 "id": cortex_id,
                 "label": role_info.get("label", agent_id),
                 "desc": f"{agent_id.title()} ready...",
-                "model": CORTEX_MODELS[cortex_id]["model"],
+                "model": self.cortex.get_cortex_model(cortex_id),
                 "color": role_info.get("color", "#888"),
             })
 
@@ -2395,7 +2404,7 @@ class AgentEngine:
             "id": "visual",
             "label": CORTEX_MODELS["visual"]["label"],
             "desc": f"Generating: {prompt[:50]}...",
-            "model": CORTEX_MODELS["visual"]["model"],
+            "model": self.cortex.get_cortex_model("visual"),
             "color": CORTEX_MODELS["visual"]["color"],
         })
 
@@ -9253,8 +9262,9 @@ def main():
         for p in config["providers"].values()
     )
     if not has_any_key:
-        print("  ⚠ No API keys configured.")
-        print(f"  Set GEMINI_API_KEY env var, use --api-key, or configure at http://localhost:{args.port}")
+        print("  ⚠ No AI provider configured.")
+        print("  Run 'python setup.py' to configure local (Ollama) or cloud mode,")
+        print(f"  or configure at http://localhost:{args.port} via the ⚙ Settings UI.")
         print()
 
     app.config["SYNAPSE_CONFIG"] = config
