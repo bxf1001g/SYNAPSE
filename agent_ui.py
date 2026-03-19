@@ -407,6 +407,20 @@ PROVIDER_MODELS = {
         "claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022",
         "claude-3-5-haiku-20241022", "claude-3-opus-20240229",
     ],
+    "nvidia": [
+        "meta/llama-3.3-70b-instruct",
+        "meta/llama-3.1-8b-instruct",
+        "meta/llama-3.1-405b-instruct",
+        "nvidia/llama-3.1-nemotron-70b-instruct",
+        "mistralai/mistral-large-2-instruct",
+        "mistralai/mistral-7b-instruct-v0.3",
+        "google/gemma-2-27b-it",
+        "google/gemma-2-9b-it",
+        "microsoft/phi-3-medium-128k-instruct",
+        "deepseek-ai/deepseek-r1",
+        "qwen/qwen2.5-72b-instruct",
+        "nvidia/nemotron-mini-4b-instruct",
+    ],
     "openai_compatible": [
         "llama3.1:8b", "llama3.2:3b", "mistral:7b", "mixtral:8x7b",
         "phi3:mini", "gemma2:9b", "gemma2:2b", "codellama:7b",
@@ -454,6 +468,10 @@ DEFAULT_CONFIG = {
         "gemini": {"api_key": "", "enabled": True},
         "openai": {"api_key": "", "enabled": False},
         "anthropic": {"api_key": "", "enabled": False},
+        "nvidia": {
+            "api_key": "", "base_url": "https://integrate.api.nvidia.com/v1",
+            "label": "NVIDIA NIM", "enabled": False,
+        },
         "github": {"api_key": "", "enabled": False},
         "openai_compatible": {
             "api_key": "", "base_url": "", "label": "Custom", "enabled": False
@@ -1077,7 +1095,7 @@ class UnifiedChat:
                 return _TextResponse("(No response generated)")
             return response
 
-        elif self.provider_type in ("openai", "openai_compatible"):
+        elif self.provider_type in ("openai", "openai_compatible", "nvidia"):
             self.messages.append({"role": "user", "content": text})
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -1141,6 +1159,13 @@ class NeuralCortex:
                 if not _anthropic_available:
                     raise RuntimeError("anthropic not installed. Run: pip install anthropic")
                 client = anthropic_sdk.Anthropic(api_key=api_key)
+            elif provider_type == "nvidia":
+                if not _openai_available:
+                    raise RuntimeError("openai not installed. Run: pip install openai")
+                base_url = prov_cfg.get("base_url", "https://integrate.api.nvidia.com/v1")
+                client = openai_sdk.OpenAI(
+                    api_key=api_key, base_url=base_url
+                )
             elif provider_type == "openai_compatible":
                 if not _openai_available:
                     raise RuntimeError("openai not installed. Run: pip install openai")
@@ -1204,7 +1229,7 @@ class NeuralCortex:
                     return "\n".join(text_parts) if text_parts else "(No response)"
                 return r.text
 
-            elif provider_type in ("openai", "openai_compatible"):
+            elif provider_type in ("openai", "openai_compatible", "nvidia"):
                 messages = []
                 if system_prompt:
                     messages.append({"role": "system", "content": system_prompt})
@@ -1446,7 +1471,7 @@ class NeuralCortex:
                         }
                 return {"success": False, "error": "No image in response"}
 
-            elif provider_type in ("openai", "openai_compatible"):
+            elif provider_type in ("openai", "openai_compatible", "nvidia"):
                 response = client.images.generate(
                     model="dall-e-3", prompt=prompt,
                     size="1024x1024", quality="standard",

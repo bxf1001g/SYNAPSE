@@ -68,6 +68,18 @@ CLOUD_PROVIDERS = {
             "visual": "gemini-2.0-flash",
         },
     },
+    "nvidia": {
+        "label": "NVIDIA NIM (free tier — Llama, Mistral, DeepSeek on NVIDIA cloud)",
+        "env_var": "NVIDIA_API_KEY",
+        "signup_url": "https://build.nvidia.com/",
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "models": {
+            "fast": "meta/llama-3.1-8b-instruct",
+            "reason": "meta/llama-3.3-70b-instruct",
+            "create": "mistralai/mistral-large-2-instruct",
+            "visual": "meta/llama-3.3-70b-instruct",
+        },
+    },
     "openai": {
         "label": "OpenAI (GPT-4o, o1)",
         "env_var": "OPENAI_API_KEY",
@@ -289,6 +301,94 @@ def setup_local():
     return config
 
 
+def setup_hybrid():
+    """Configure hybrid mode: local Ollama + cloud API together."""
+    print("\n  ── Hybrid Mode Setup ──")
+    print("  Fast tasks run locally (Ollama), heavy reasoning uses cloud APIs.")
+    print("  This is ideal for Jetson — saves RAM while getting powerful reasoning.\n")
+
+    # Step 1: Local Ollama setup (just model selection, lightweight)
+    installed, existing_models = check_ollama()
+    ollama_url = "http://localhost:11434/v1"
+
+    local_model = "phi3:latest"
+    if installed and existing_models:
+        print(f"  ✓ Ollama detected with models: {', '.join(existing_models)}")
+        local_model = ask(
+            "Choose local model for fast tasks",
+            existing_models,
+            existing_models[0],
+        )
+    elif installed:
+        print("  ✓ Ollama installed but no models pulled yet.")
+        local_model = ask("Which model to use locally?", [
+            "phi3:latest", "qwen3:4b", "gemma3:4b",
+        ], "phi3:latest")
+    else:
+        install_ollama_instructions()
+        local_model = "phi3:latest"
+
+    # Step 2: Cloud provider for reasoning
+    print("\n  Now choose a cloud provider for heavy reasoning tasks:")
+    cloud_providers = {
+        "nvidia": CLOUD_PROVIDERS["nvidia"],
+        "gemini": CLOUD_PROVIDERS["gemini"],
+    }
+    provider_key = ask(
+        "Cloud provider for reasoning",
+        [v["label"] for v in cloud_providers.values()],
+        CLOUD_PROVIDERS["nvidia"]["label"],
+    )
+    prov_id = [k for k, v in cloud_providers.items() if v["label"] == provider_key][0]
+    prov = cloud_providers[prov_id]
+
+    existing_key = os.environ.get(prov["env_var"], "")
+    if existing_key:
+        print(f"\n  ✓ Found {prov['env_var']} in environment")
+        api_key = existing_key
+    else:
+        print(f"\n  Get your free API key at: {prov['signup_url']}")
+        api_key = ask(f"Enter your {prov_id.upper()} API key").strip()
+        if not api_key:
+            print("  ⚠ No API key. You can add it later in Settings.")
+
+    # Build hybrid config: local for fast/visual, cloud for reason/create
+    config = {
+        "mode": "hybrid",
+        "providers": {
+            "gemini": {"api_key": "", "enabled": False},
+            "openai": {"api_key": "", "enabled": False},
+            "anthropic": {"api_key": "", "enabled": False},
+            "nvidia": {
+                "api_key": "", "base_url": "https://integrate.api.nvidia.com/v1",
+                "label": "NVIDIA NIM", "enabled": False,
+            },
+            "openai_compatible": {
+                "api_key": "not-needed", "base_url": ollama_url,
+                "label": "Ollama (Local)", "enabled": True,
+            },
+        },
+        "cortex_map": {
+            "fast": {"provider": "openai_compatible", "model": local_model},
+            "reason": {"provider": prov_id, "model": prov["models"]["reason"]},
+            "create": {"provider": prov_id, "model": prov["models"]["create"]},
+            "visual": {"provider": "openai_compatible", "model": local_model},
+        },
+    }
+
+    config["providers"][prov_id]["api_key"] = api_key
+    config["providers"][prov_id]["enabled"] = True
+    if "base_url" in prov:
+        config["providers"][prov_id]["base_url"] = prov["base_url"]
+
+    print("\n  ✓ Hybrid config:")
+    print(f"    ⚡ Fast/Visual: {local_model} (local Ollama)")
+    print(f"    🧠 Reasoning:  {prov['models']['reason']} ({prov_id})")
+    print(f"    🎨 Creative:   {prov['models']['create']} ({prov_id})")
+
+    return config
+
+
 def setup_cloud():
     """Configure cloud mode with API provider."""
     print("\n  ── Cloud Mode Setup ──")
@@ -319,6 +419,10 @@ def setup_cloud():
             "gemini": {"api_key": "", "enabled": False},
             "openai": {"api_key": "", "enabled": False},
             "anthropic": {"api_key": "", "enabled": False},
+            "nvidia": {
+                "api_key": "", "base_url": "https://integrate.api.nvidia.com/v1",
+                "label": "NVIDIA NIM", "enabled": False,
+            },
             "openai_compatible": {
                 "api_key": "", "base_url": "", "label": "Custom", "enabled": False
             },
@@ -328,6 +432,9 @@ def setup_cloud():
 
     config["providers"][prov_id]["api_key"] = api_key
     config["providers"][prov_id]["enabled"] = True
+    # Preserve base_url for providers that need it (e.g. NVIDIA)
+    if "base_url" in prov:
+        config["providers"][prov_id]["base_url"] = prov["base_url"]
     config["cortex_map"] = {
         k: {"provider": prov_id, "model": m}
         for k, m in prov["models"].items()
@@ -358,7 +465,7 @@ def write_env_file(config):
     lines = []
     mode = config.get("mode", "local")
 
-    if mode == "cloud":
+    if mode == "cloud" or mode == "hybrid":
         lines.append("SYNAPSE_CLOUD_MODE=1")
         for pid, pcfg in config["providers"].items():
             if pcfg.get("api_key") and pcfg.get("enabled"):
@@ -368,6 +475,8 @@ def write_env_file(config):
                     lines.append(f"OPENAI_API_KEY={pcfg['api_key']}")
                 elif pid == "anthropic":
                     lines.append(f"ANTHROPIC_API_KEY={pcfg['api_key']}")
+                elif pid == "nvidia":
+                    lines.append(f"NVIDIA_API_KEY={pcfg['api_key']}")
     else:
         lines.append("SYNAPSE_CLOUD_MODE=0")
 
@@ -422,14 +531,19 @@ def main():
     print("  🖥  LOCAL  — Run AI models on your own hardware (Jetson, GPU, CPU)")
     print("               Free, private, no internet needed after setup")
     print("               Uses Ollama + open-source models\n")
-    print("  ☁  CLOUD  — Use cloud AI APIs (Gemini, GPT-4, Claude)")
+    print("  ☁  CLOUD  — Use cloud AI APIs (Gemini, GPT-4, Claude, NVIDIA NIM)")
     print("               More powerful models, requires API key + internet")
-    print("               Free tiers available (Gemini recommended)\n")
+    print("               Free tiers available (Gemini & NVIDIA recommended)\n")
+    print("  🔀 HYBRID — Local Ollama + cloud API together (recommended for Jetson)")
+    print("               Fast tasks run locally, heavy reasoning uses cloud")
+    print("               Best of both worlds\n")
 
-    mode = ask("Choose mode", ["local", "cloud"], "local")
+    mode = ask("Choose mode", ["local", "cloud", "hybrid"], "local")
 
     if mode == "local":
         config = setup_local()
+    elif mode == "hybrid":
+        config = setup_hybrid()
     else:
         config = setup_cloud()
 
@@ -471,6 +585,14 @@ def main():
         print("  Mode:     LOCAL (Ollama)")
         print(f"  Model:    {model}")
         print(f"  Ollama:   {ollama_url}")
+    elif saved_mode == "hybrid":
+        cortex = config.get("cortex_map", {})
+        fast_m = cortex.get("fast", {}).get("model", "?")
+        reason_m = cortex.get("reason", {}).get("model", "?")
+        reason_p = cortex.get("reason", {}).get("provider", "?")
+        print("  Mode:     HYBRID (Local + Cloud)")
+        print(f"  Fast:     {fast_m} (local Ollama)")
+        print(f"  Reason:   {reason_m} ({reason_p})")
     else:
         active = [k for k, v in config.get("providers", {}).items() if v.get("enabled")]
         print(f"  Mode:     CLOUD ({', '.join(active)})")
@@ -479,7 +601,7 @@ def main():
     print()
     print("  To start SYNAPSE:")
     print()
-    if saved_mode == "local":
+    if saved_mode == "local" or saved_mode == "hybrid":
         print("    1. Make sure Ollama is running:  ollama serve")
         print("    2. Start SYNAPSE:                python agent_ui.py")
     else:
