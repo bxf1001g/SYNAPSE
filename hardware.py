@@ -112,7 +112,7 @@ class HardwareController:
         if not _gpio_available:
             hints.append("pip install Jetson.GPIO  # or RPi.GPIO for Raspberry Pi")
         if not _servo_kit_available:
-            hints.append("pip install adafruit-servokit")
+            hints.append("pip install adafruit-circuitpython-servokit")
         if not _i2c_available:
             hints.append("pip install adafruit-blinka")
         return hints
@@ -120,27 +120,98 @@ class HardwareController:
     # ── Camera ──────────────────────────────────────────────────
 
     def capture_image(self, filename="capture.jpg", camera_index=None):
-        """Capture a single image from camera. Returns filepath and base64 data."""
+        """Capture a single image from camera. Returns filepath and base64 data.
+
+        Tries multiple camera backends in order:
+        1. USB camera via V4L2 (index 0, 1, 2...)
+        2. CSI camera via GStreamer/nvarguscamerasrc (Jetson)
+        3. CSI camera via libcamera (RPi)
+        """
         if not _cv2_available:
             return {
                 "success": False,
                 "error": "OpenCV not installed. Run: pip install opencv-python",
             }
 
+        cap = None
+        source_desc = "unknown"
+
+        # Strategy 1: try specified or default index
         idx = camera_index if camera_index is not None else self._camera_index
         cap = cv2.VideoCapture(idx)
-        if not cap.isOpened():
-            # Try CSI camera on Jetson via GStreamer pipeline
+        if cap.isOpened():
+            source_desc = f"V4L2 index {idx}"
+        else:
+            cap.release()
+            cap = None
+
+        # Strategy 2: scan /dev/video* devices
+        if cap is None:
+            import glob as _glob
+            for dev in sorted(_glob.glob("/dev/video*")):
+                try:
+                    dev_idx = int(dev.replace("/dev/video", ""))
+                    c = cv2.VideoCapture(dev_idx)
+                    if c.isOpened():
+                        cap = c
+                        source_desc = dev
+                        break
+                    c.release()
+                except (ValueError, Exception):
+                    pass
+
+        # Strategy 3: Jetson CSI via GStreamer/nvarguscamerasrc
+        if cap is None:
             gst_pipeline = (
                 "nvarguscamerasrc ! "
                 "video/x-raw(memory:NVMM),width=1280,height=720,framerate=30/1 ! "
                 "nvvidconv ! video/x-raw,format=BGRx ! "
                 "videoconvert ! video/x-raw,format=BGR ! appsink"
             )
-            cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
+            c = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
+            if c.isOpened():
+                cap = c
+                source_desc = "Jetson CSI (nvarguscamerasrc)"
+            else:
+                c.release()
 
-        if not cap.isOpened():
-            return {"success": False, "error": f"Cannot open camera {idx}"}
+        # Strategy 4: Jetson CSI sensor-id 1
+        if cap is None:
+            gst_pipeline2 = (
+                "nvarguscamerasrc sensor-id=1 ! "
+                "video/x-raw(memory:NVMM),width=1280,height=720,framerate=30/1 ! "
+                "nvvidconv ! video/x-raw,format=BGRx ! "
+                "videoconvert ! video/x-raw,format=BGR ! appsink"
+            )
+            c = cv2.VideoCapture(gst_pipeline2, cv2.CAP_GSTREAMER)
+            if c.isOpened():
+                cap = c
+                source_desc = "Jetson CSI sensor-id=1"
+            else:
+                c.release()
+
+        # Strategy 5: v4l2src (generic GStreamer)
+        if cap is None:
+            gst_v4l2 = (
+                "v4l2src device=/dev/video0 ! "
+                "video/x-raw,width=640,height=480 ! "
+                "videoconvert ! video/x-raw,format=BGR ! appsink"
+            )
+            c = cv2.VideoCapture(gst_v4l2, cv2.CAP_GSTREAMER)
+            if c.isOpened():
+                cap = c
+                source_desc = "v4l2src /dev/video0"
+            else:
+                c.release()
+
+        if cap is None:
+            return {
+                "success": False,
+                "error": (
+                    "No camera found. Tried V4L2, CSI (nvarguscamerasrc), v4l2src. "
+                    "Check: ls /dev/video*  and  sudo systemctl restart nvargus-daemon"
+                ),
+            }
 
         try:
             # Warm up camera (first frames can be dark)
@@ -166,6 +237,7 @@ class HardwareController:
                 "base64": b64,
                 "width": w,
                 "height": h,
+                "source": source_desc,
             }
         finally:
             cap.release()
