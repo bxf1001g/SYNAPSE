@@ -219,6 +219,48 @@ def setup_local():
     # Ollama base URL
     ollama_url = ask("Ollama API URL", default="http://localhost:11434/v1")
 
+    # Neural Council setup
+    print("\n  ── Neural Council (Optional) ──")
+    print("  Multiple models think about each task sequentially, then a")
+    print("  refiner synthesizes the best answer. Models run one at a time.")
+    setup_council = ask("Enable Neural Council?", ["yes", "no"], "no")
+
+    council_models = []
+    council_refiner = ""
+    if setup_council == "yes":
+        print(f"\n  Your primary model ({chosen_model}) is already included.")
+        print("  Add more models to the council (they'll think in order):")
+        other_models = [m for m, _ in models if m != chosen_model]
+        for i, m in enumerate(other_models, 1):
+            print(f"  [{i}] {m}")
+        print(f"  [{len(other_models) + 1}] Done — no more models")
+
+        council_models = [chosen_model]
+        while True:
+            pick = ask(
+                "Add model",
+                [str(j) for j in range(1, len(other_models) + 2)],
+                str(len(other_models) + 1),
+            )
+            idx = int(pick) - 1
+            if idx >= len(other_models):
+                break
+            m = other_models[idx]
+            if m not in council_models:
+                council_models.append(m)
+                print(f"  ✓ Added {m}")
+                if installed and m not in existing_models:
+                    pull = ask(f"Pull {m} now?", ["yes", "no"], "yes")
+                    if pull == "yes":
+                        pull_ollama_model(m)
+
+        council_refiner = ask(
+            "Which model should be the final refiner?",
+            council_models,
+            council_models[0],
+        )
+        print(f"\n  Council: {' → '.join(council_models)} → Refiner: {council_refiner}")
+
     config = {
         "mode": "local",
         "providers": {
@@ -239,6 +281,11 @@ def setup_local():
             "visual": {"provider": "openai_compatible", "model": chosen_model},
         },
     }
+
+    if council_models and len(council_models) > 1:
+        config["council_models"] = council_models
+        config["council_refiner"] = council_refiner
+        config["council_enabled"] = True
     return config
 
 

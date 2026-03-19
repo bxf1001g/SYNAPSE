@@ -1253,6 +1253,110 @@ class NeuralCortex:
             max_tokens=cfg["max_tokens"],
         )
 
+    def council_generate(self, prompt, system_prompt=None, emit_fn=None):
+        """Neural Council: multiple models think sequentially, then a refiner synthesizes.
+
+        Only one model is loaded in VRAM at a time (Ollama auto-swaps).
+        Each model sees the question + previous answers for richer reasoning.
+        Returns (final_answer, council_log) where council_log has each model's response.
+        """
+        council_models = self.config.get("council_models", [])
+        if not council_models:
+            # No council configured — just use the regular create cortex
+            return self.quick_generate("create", prompt, system_prompt), []
+
+        council_log = []
+        refiner_model = self.config.get("council_refiner",
+                                        council_models[0] if council_models else None)
+        provider_type = "openai_compatible"
+
+        try:
+            client = self._get_provider_client(provider_type)
+        except Exception as e:
+            return f"Council error: {e}", []
+
+        # Phase 1: Each model thinks about the question sequentially
+        for i, model_name in enumerate(council_models):
+            if emit_fn:
+                emit_fn("council_thinking", {
+                    "model": model_name,
+                    "step": i + 1,
+                    "total": len(council_models),
+                    "phase": "thinking",
+                })
+
+            # Build context: original question + previous answers
+            context = f"Question/Task:\n{prompt}\n\n"
+            if council_log:
+                context += "Previous analysis from other models:\n"
+                for prev in council_log:
+                    context += f"\n--- {prev['model']} ---\n{prev['response']}\n"
+                context += (
+                    "\nConsider the above analysis. Add your own perspective — "
+                    "agree, disagree, or build upon the previous answers. "
+                    "Focus on what others may have missed.\n"
+                )
+
+            try:
+                response = self._unified_generate(
+                    provider_type, client, model_name, context,
+                    system_prompt=system_prompt or (
+                        "You are an expert AI assistant. Think carefully and provide "
+                        "your best analysis. Be concise but thorough."
+                    ),
+                    temperature=0.7, max_tokens=4096,
+                )
+                council_log.append({
+                    "model": model_name,
+                    "response": response,
+                    "step": i + 1,
+                })
+            except Exception as e:
+                council_log.append({
+                    "model": model_name,
+                    "response": f"(Error: {e})",
+                    "step": i + 1,
+                })
+
+        # Phase 2: Refiner synthesizes all answers into one best response
+        if len(council_log) > 1 and refiner_model:
+            if emit_fn:
+                emit_fn("council_thinking", {
+                    "model": refiner_model,
+                    "step": len(council_models) + 1,
+                    "total": len(council_models) + 1,
+                    "phase": "refining",
+                })
+
+            refine_prompt = f"Original question/task:\n{prompt}\n\n"
+            refine_prompt += "Multiple AI models have analyzed this. Here are their responses:\n"
+            for entry in council_log:
+                refine_prompt += f"\n--- {entry['model']} ---\n{entry['response']}\n"
+            refine_prompt += (
+                "\nSynthesize the best possible answer from all perspectives above. "
+                "Take the strongest points from each, resolve any disagreements, "
+                "and produce one clear, comprehensive final answer. "
+                "If this is a coding task, produce the final working code."
+            )
+
+            try:
+                final = self._unified_generate(
+                    provider_type, client, refiner_model, refine_prompt,
+                    system_prompt=(
+                        "You are the final decision-maker in a council of AI models. "
+                        "Synthesize the best answer from multiple perspectives."
+                    ),
+                    temperature=0.3, max_tokens=8192,
+                )
+                return final, council_log
+            except Exception as e:
+                return f"Refiner error ({refiner_model}): {e}", council_log
+
+        # Only one model in council — just return its answer
+        if council_log:
+            return council_log[0]["response"], council_log
+        return "(No council models configured)", []
+
     def generate_image(self, prompt, save_path=None):
         """Generate an image using the visual cortex (Gemini or DALL-E)."""
         try:
@@ -1789,6 +1893,32 @@ class AgentEngine:
     # ── Question Answering (full scripting power) ────────────
 
     def answer_question(self, question):
+        # Check if Neural Council is enabled
+        council_enabled = self.cortex.config.get("council_enabled", False)
+        council_models = self.cortex.config.get("council_models", [])
+        if council_enabled and len(council_models) > 1:
+            self.emit("status", {"agent": "system", "status": "council_thinking"})
+            answer, log = self.cortex.council_generate(
+                question,
+                emit_fn=self.emit,
+            )
+            # Emit each model's thinking
+            for entry in log:
+                self.emit("council_response", {
+                    "model": entry["model"],
+                    "response": entry["response"],
+                    "step": entry["step"],
+                })
+            # Emit final refined answer
+            self.emit("agent_message", {
+                "agent": "architect",
+                "text": answer,
+                "council": True,
+                "models_used": [e["model"] for e in log],
+            })
+            self._store_memory(question, answer)
+            return
+
         # Recall relevant memories
         memory_context = self._recall_memory(question)
 
@@ -8482,6 +8612,59 @@ def post_settings():
 @app.route("/api/models")
 def get_models():
     return json.dumps(PROVIDER_MODELS)
+
+
+# ── Neural Council API ──────────────────────────────────────────
+
+@app.route("/api/council/config", methods=["GET"])
+def get_council_config():
+    """Get current Neural Council configuration."""
+    cfg = app.config.get("SYNAPSE_CONFIG", {})
+    return json.dumps({
+        "council_models": cfg.get("council_models", []),
+        "council_refiner": cfg.get("council_refiner", ""),
+        "council_enabled": cfg.get("council_enabled", False),
+        "available_models": PROVIDER_MODELS.get("openai_compatible", []),
+    })
+
+
+@app.route("/api/council/config", methods=["POST"])
+def set_council_config():
+    """Configure Neural Council models."""
+    data = request.get_json()
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    cfg = load_config(base_dir)
+
+    if "council_models" in data:
+        cfg["council_models"] = data["council_models"]
+    if "council_refiner" in data:
+        cfg["council_refiner"] = data["council_refiner"]
+    if "council_enabled" in data:
+        cfg["council_enabled"] = data["council_enabled"]
+
+    save_config(cfg, base_dir)
+    app.config["SYNAPSE_CONFIG"] = cfg
+    return json.dumps({"status": "ok"})
+
+
+@app.route("/api/council/ask", methods=["POST"])
+def council_ask():
+    """Ask the Neural Council a question — all models think, then refine."""
+    data = request.get_json()
+    prompt = data.get("prompt", "")
+    if not prompt:
+        return json.dumps({"error": "No prompt provided"}), 400
+
+    cfg = app.config.get("SYNAPSE_CONFIG", load_config(
+        os.path.dirname(os.path.abspath(__file__))
+    ))
+    cortex = NeuralCortex(cfg)
+    answer, log = cortex.council_generate(prompt)
+    return json.dumps({
+        "answer": answer,
+        "council_log": log,
+        "models_used": [e["model"] for e in log],
+    })
 
 
 # ── Webhook / Event-Driven API ──────────────────────────────────
