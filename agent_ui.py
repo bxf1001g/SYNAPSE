@@ -4131,56 +4131,88 @@ def _emotion_get_evolution_threshold():
 
 
 def _emotion_persist(firestore_db=None):
-    """Save emotional state to Firestore for persistence across restarts."""
-    if not firestore_db:
-        try:
-            from google.cloud import firestore as _fs
-            firestore_db = _fs.Client()
-        except Exception:
-            return False
+    """Save emotional state — Firestore in cloud, local JSON file otherwise."""
+    # Try Firestore first (cloud mode)
+    if firestore_db or (os.environ.get("SYNAPSE_CLOUD_MODE", "").strip() in ("1", "true")):
+        if not firestore_db:
+            try:
+                from google.cloud import firestore as _fs
+                firestore_db = _fs.Client()
+            except Exception:
+                firestore_db = None
+        if firestore_db:
+            try:
+                doc_ref = firestore_db.collection("synapse_state").document("emotions")
+                state_copy = json.loads(json.dumps(_emotional_state, default=str))
+                doc_ref.set(state_copy)
+                print("[EMOTION] State persisted to Firestore", flush=True)
+                return True
+            except Exception as e:
+                print(f"[EMOTION] Firestore persist error: {e}", flush=True)
+
+    # Local file persistence
     try:
-        doc_ref = firestore_db.collection("synapse_state").document("emotions")
-        # Prepare serializable copy
+        ws = os.environ.get("WORKSPACE", "./workspace")
+        emo_path = os.path.join(ws, ".synapse_emotions.json")
         state_copy = json.loads(json.dumps(_emotional_state, default=str))
-        doc_ref.set(state_copy)
-        print("[EMOTION] State persisted to Firestore", flush=True)
+        with open(emo_path, "w", encoding="utf-8") as f:
+            json.dump(state_copy, f, indent=2)
         return True
     except Exception as e:
-        print(f"[EMOTION] Persist error: {e}", flush=True)
+        print(f"[EMOTION] Local persist error: {e}", flush=True)
         return False
 
 
 def _emotion_load(firestore_db=None):
-    """Load emotional state from Firestore on boot."""
+    """Load emotional state — Firestore in cloud, local JSON file otherwise."""
     global _emotional_state
-    if not firestore_db:
+
+    loaded = None
+
+    # Try Firestore first (cloud mode)
+    if firestore_db or (os.environ.get("SYNAPSE_CLOUD_MODE", "").strip() in ("1", "true")):
+        if not firestore_db:
+            try:
+                from google.cloud import firestore as _fs
+                firestore_db = _fs.Client()
+            except Exception:
+                firestore_db = None
+        if firestore_db:
+            try:
+                doc_ref = firestore_db.collection("synapse_state").document("emotions")
+                doc = doc_ref.get()
+                if doc.exists:
+                    loaded = doc.to_dict()
+                    print("[EMOTION] Loaded state from Firestore", flush=True)
+            except Exception as e:
+                print(f"[EMOTION] Firestore load error: {e}", flush=True)
+
+    # Try local file if Firestore didn't provide data
+    if not loaded:
         try:
-            from google.cloud import firestore as _fs
-            firestore_db = _fs.Client()
-        except Exception:
-            return False
-    try:
-        doc_ref = firestore_db.collection("synapse_state").document("emotions")
-        doc = doc_ref.get()
-        if doc.exists:
-            loaded = doc.to_dict()
-            # Merge loaded patterns with defaults (in case new patterns were added)
-            for name, default_pattern in _emotional_state["patterns"].items():
-                if name in loaded.get("patterns", {}):
-                    _emotional_state["patterns"][name] = loaded["patterns"][name]
-            _emotional_state["beliefs"] = loaded.get("beliefs", [])
-            _emotional_state["mood"] = loaded.get("mood", "neutral")
-            _emotional_state["mood_history"] = loaded.get("mood_history", [])
-            _emotional_state["total_events_processed"] = loaded.get(
-                "total_events_processed", 0)
-            _emotional_state["last_updated"] = loaded.get("last_updated")
-            print(f"[EMOTION] Loaded state from Firestore "
-                  f"(mood={_emotional_state['mood']}, "
-                  f"events={_emotional_state['total_events_processed']})",
-                  flush=True)
-            return True
-    except Exception as e:
-        print(f"[EMOTION] Load error: {e}", flush=True)
+            ws = os.environ.get("WORKSPACE", "./workspace")
+            emo_path = os.path.join(ws, ".synapse_emotions.json")
+            if os.path.exists(emo_path):
+                with open(emo_path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                print("[EMOTION] Loaded state from local file", flush=True)
+        except Exception as e:
+            print(f"[EMOTION] Local load error: {e}", flush=True)
+
+    if loaded:
+        for name, default_pattern in _emotional_state["patterns"].items():
+            if name in loaded.get("patterns", {}):
+                _emotional_state["patterns"][name] = loaded["patterns"][name]
+        _emotional_state["beliefs"] = loaded.get("beliefs", [])
+        _emotional_state["mood"] = loaded.get("mood", "neutral")
+        _emotional_state["mood_history"] = loaded.get("mood_history", [])
+        _emotional_state["total_events_processed"] = loaded.get(
+            "total_events_processed", 0)
+        _emotional_state["last_updated"] = loaded.get("last_updated")
+        print(f"[EMOTION] State: mood={_emotional_state['mood']}, "
+              f"events={_emotional_state['total_events_processed']}",
+              flush=True)
+        return True
     return False
 
 
