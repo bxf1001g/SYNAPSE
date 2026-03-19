@@ -414,6 +414,41 @@ PROVIDER_MODELS = {
     ],
 }
 
+# Cache for detected Ollama models
+_ollama_models_cache = {"models": [], "last_check": 0}
+
+
+def detect_ollama_models(base_url="http://localhost:11434"):
+    """Query Ollama API for actually installed models."""
+    import urllib.request
+    cache = _ollama_models_cache
+    now = time.time()
+    if cache["models"] and now - cache["last_check"] < 60:
+        return cache["models"]
+    try:
+        req = urllib.request.Request(f"{base_url}/api/tags", method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode())
+        models = [m["name"] for m in data.get("models", [])]
+        cache["models"] = models
+        cache["last_check"] = now
+        return models
+    except Exception:
+        return cache["models"]
+
+
+def get_provider_models_with_ollama():
+    """Return PROVIDER_MODELS with live Ollama models merged in."""
+    result = dict(PROVIDER_MODELS)
+    ollama = detect_ollama_models()
+    if ollama:
+        merged = list(ollama)
+        for m in PROVIDER_MODELS.get("openai_compatible", []):
+            if m not in merged:
+                merged.append(m)
+        result["openai_compatible"] = merged
+    return result
+
 DEFAULT_CONFIG = {
     "providers": {
         "gemini": {"api_key": "", "enabled": True},
@@ -1196,9 +1231,25 @@ class NeuralCortex:
         except Exception as e:
             error_msg = str(e)
             if "not found" in error_msg.lower() or "invalid" in error_msg.lower():
-                # Model name is bad — try fallback to gemini-3-flash-preview
-                print(f"[CORTEX] Model '{model}' failed ({error_msg}), falling back to gemini-3-flash-preview")
-                if provider_type == "gemini":
+                # Model not available — try fallback
+                if provider_type == "openai_compatible":
+                    # Try other installed Ollama models before giving up
+                    ollama_models = detect_ollama_models()
+                    if ollama_models:
+                        fallback = ollama_models[0]
+                        print(f"[CORTEX] Model '{model}' not found, trying Ollama model '{fallback}'")
+                        try:
+                            r = client.chat.completions.create(
+                                model=fallback,
+                                messages=messages,
+                                temperature=temperature,
+                                max_tokens=max_tokens,
+                            )
+                            return r.choices[0].message.content
+                        except Exception:
+                            pass
+                elif provider_type == "gemini":
+                    print(f"[CORTEX] Model '{model}' failed ({error_msg}), falling back to gemini-3-flash-preview")
                     gen_cfg = types.GenerateContentConfig(
                         temperature=temperature, max_output_tokens=max_tokens,
                     )
@@ -8789,7 +8840,7 @@ def get_settings():
             prov["api_key_masked"] = ""
             prov["has_key"] = bool(key)
         prov.pop("api_key", None)
-    return json.dumps({"settings": safe, "provider_models": PROVIDER_MODELS})
+    return json.dumps({"settings": safe, "provider_models": get_provider_models_with_ollama()})
 
 
 @app.route("/api/settings", methods=["POST"])
@@ -8826,7 +8877,14 @@ def post_settings():
 
 @app.route("/api/models")
 def get_models():
-    return json.dumps(PROVIDER_MODELS)
+    return json.dumps(get_provider_models_with_ollama())
+
+
+@app.route("/api/ollama/models")
+def get_ollama_models():
+    """Detect and return installed Ollama models."""
+    models = detect_ollama_models()
+    return json.dumps({"models": models, "count": len(models)})
 
 
 # ── Neural Council API ──────────────────────────────────────────
@@ -10014,6 +10072,42 @@ def main():
 
     app.config["SYNAPSE_CONFIG"] = config
     app.config["WORKSPACE"] = workspace
+
+    # Auto-detect Ollama models and fix config if configured model isn't installed
+    if config.get("mode") == "local" or config["providers"].get(
+        "openai_compatible", {}
+    ).get("enabled"):
+        base_url = config["providers"].get("openai_compatible", {}).get(
+            "base_url", "http://localhost:11434/v1"
+        )
+        ollama_url = base_url.replace("/v1", "")
+        installed = detect_ollama_models(ollama_url)
+        if installed:
+            print(f"  🔍 Ollama models detected: {', '.join(installed)}")
+            cortex_map = config.get("cortex_map", {})
+            changed = False
+            for cid, mapping in cortex_map.items():
+                if mapping.get("provider") == "openai_compatible":
+                    cur = mapping.get("model", "")
+                    if cur and cur not in installed:
+                        mapping["model"] = installed[0]
+                        changed = True
+                        print(f"  ⚡ {cid} cortex: '{cur}' not installed → using '{installed[0]}'")
+            # Also fix council models
+            council = config.get("council_models", [])
+            if council:
+                valid = [m for m in council if m in installed]
+                if len(valid) < len(council):
+                    config["council_models"] = installed[:4] if len(installed) >= 4 else installed
+                    config["council_refiner"] = installed[0]
+                    changed = True
+                    print(f"  ⚡ Council models updated to: {config['council_models']}")
+            if changed:
+                save_config(config, base_dir)
+                app.config["SYNAPSE_CONFIG"] = config
+                print("  ✓ Config auto-updated with available Ollama models")
+        else:
+            print("  ⚠ Ollama running but no models found. Run: ollama pull qwen3:4b")
 
     term_mgr = TerminalManager(socketio)
 
