@@ -490,6 +490,138 @@ class HardwareController:
 
         return "\n".join(parts)
 
+    # ── Image Comparison (for autonomous feedback) ──────────────
+
+    def compare_images(self, img1_path, img2_path, threshold=5.0):
+        """Compare two images and return change percentage.
+
+        Uses pixel-level difference to detect physical movement.
+        Returns {"changed": bool, "change_pct": float, "regions": [...]}.
+        """
+        if not _cv2_available:
+            return {"changed": False, "error": "OpenCV not installed"}
+
+        try:
+            a = cv2.imread(img1_path)
+            b = cv2.imread(img2_path)
+            if a is None or b is None:
+                return {"changed": False, "error": "Could not read images"}
+
+            # Resize to same dimensions if needed
+            if a.shape != b.shape:
+                b = cv2.resize(b, (a.shape[1], a.shape[0]))
+
+            # Convert to grayscale and compute difference
+            gray_a = cv2.cvtColor(a, cv2.COLOR_BGR2GRAY)
+            gray_b = cv2.cvtColor(b, cv2.COLOR_BGR2GRAY)
+            diff = cv2.absdiff(gray_a, gray_b)
+
+            # Threshold to find significant changes
+            _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
+            change_pixels = cv2.countNonZero(thresh)
+            total_pixels = thresh.shape[0] * thresh.shape[1]
+            change_pct = (change_pixels / total_pixels) * 100
+
+            # Find regions of change (bounding boxes)
+            regions = []
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for c in sorted(contours, key=cv2.contourArea, reverse=True)[:5]:
+                if cv2.contourArea(c) > 100:
+                    x, y, w, h = cv2.boundingRect(c)
+                    regions.append({"x": int(x), "y": int(y), "w": int(w), "h": int(h)})
+
+            # Save diff visualization
+            diff_path = os.path.join(self.workspace, "_diff.jpg")
+            cv2.imwrite(diff_path, diff)
+
+            return {
+                "changed": change_pct > threshold,
+                "change_pct": round(change_pct, 2),
+                "regions": regions,
+                "diff_image": diff_path,
+            }
+        except Exception as e:
+            return {"changed": False, "error": str(e)}
+
+    # ── Autonomous Discovery ────────────────────────────────────
+
+    def scan_gpio_pins(self):
+        """Scan available GPIO pins on Jetson/RPi. Returns list of usable pins."""
+        # Jetson Orin Nano 40-pin header — safe GPIO pins
+        jetson_gpio = [7, 11, 12, 13, 15, 16, 18, 19, 21, 22, 23, 24, 26,
+                       29, 31, 32, 33, 35, 36, 37, 38, 40]
+        rpi_gpio = [3, 5, 7, 8, 10, 11, 12, 13, 15, 16, 18, 19, 21, 22,
+                    23, 24, 26, 29, 31, 32, 33, 35, 36, 37, 38, 40]
+
+        if not _gpio_available:
+            return {"success": False, "pins": [], "error": "GPIO not available"}
+
+        platform = "jetson" if "Jetson" in str(type(_gpio)) else "rpi"
+        pins = jetson_gpio if platform == "jetson" else rpi_gpio
+
+        return {
+            "success": True,
+            "platform": platform,
+            "pins": pins,
+            "total": len(pins),
+        }
+
+    def scan_i2c_devices(self):
+        """Scan I2C bus for connected devices. Returns list of addresses."""
+        if not _i2c_available:
+            return {"success": False, "devices": [], "error": "I2C not available"}
+
+        try:
+            i2c = busio.I2C(board.SCL, board.SDA)
+            while not i2c.try_lock():
+                time.sleep(0.01)
+            try:
+                devices = i2c.scan()
+                known = {
+                    0x29: "VL53L0X (distance)",
+                    0x3C: "SSD1306 (OLED display)",
+                    0x40: "PCA9685 (servo driver)",
+                    0x48: "ADS1115 (ADC)",
+                    0x53: "ADXL345 (accelerometer)",
+                    0x68: "MPU6050 (IMU)",
+                    0x76: "BME280 (temp/humidity/pressure)",
+                    0x77: "BMP280 (temp/pressure)",
+                    0x23: "BH1750 (light)",
+                }
+                return {
+                    "success": True,
+                    "devices": [
+                        {"address": hex(d), "name": known.get(d, "unknown")}
+                        for d in devices
+                    ],
+                }
+            finally:
+                i2c.unlock()
+        except Exception as e:
+            return {"success": False, "devices": [], "error": str(e)}
+
+    def discover_hardware(self):
+        """Full hardware discovery: camera, GPIO, I2C, servos."""
+        report = {
+            "timestamp": time.time(),
+            "camera": self.status()["camera"],
+            "gpio": self.scan_gpio_pins(),
+            "i2c": self.scan_i2c_devices(),
+            "servo_controller": {
+                "available": _servo_kit_available,
+                "detected": False,
+            },
+        }
+
+        # Check if PCA9685 servo controller is on I2C
+        i2c = report["i2c"]
+        if i2c.get("success"):
+            for dev in i2c.get("devices", []):
+                if dev.get("address") == "0x40":
+                    report["servo_controller"]["detected"] = True
+
+        return report
+
     # ── Cleanup ─────────────────────────────────────────────────
 
     def cleanup(self):

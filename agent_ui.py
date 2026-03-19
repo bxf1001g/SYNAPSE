@@ -8973,6 +8973,262 @@ def hardware_stop():
     return json.dumps({"success": True, "stopped": []})
 
 
+@app.route("/api/hardware/discover", methods=["POST"])
+def hardware_discover():
+    """Scan and discover all connected hardware."""
+    if not _hardware_available:
+        return json.dumps({"success": False, "error": "Hardware not available"}), 400
+    global _hw_controller
+    if _hw_controller is None:
+        ws = app.config.get("WORKSPACE", "./workspace")
+        _hw_controller = HardwareController(workspace=ws)
+    return json.dumps(_hw_controller.discover_hardware())
+
+
+# ── Autonomous Exploration Engine ───────────────────────────────
+
+_autonomy_active = False
+_autonomy_thread = None
+_autonomy_log = []
+
+
+def _autonomy_loop():
+    """Autonomous exploration: observe → think → act → verify → learn.
+
+    The AI uses the camera as its eyes. It tries actions (GPIO, servos)
+    and watches for visual changes to learn what each output controls.
+    No GPIO pin mapping needed — it discovers everything itself.
+    """
+    global _autonomy_active, _hw_controller, _autonomy_log
+
+    if not _hardware_available or _hw_controller is None:
+        return
+
+    config = app.config.get("SYNAPSE_CONFIG", {})
+    cortex = NeuralCortex(config)
+    hw = _hw_controller
+    memory = get_memory(app.config.get("WORKSPACE", "./workspace"))
+    discoveries = []
+
+    _log_autonomy("system", "Autonomous exploration started")
+    socketio.emit("autonomy_status", {"active": True, "phase": "starting"})
+
+    cycle = 0
+    while _autonomy_active:
+        cycle += 1
+        _log_autonomy("system", f"Exploration cycle {cycle}")
+        socketio.emit("autonomy_status", {
+            "active": True, "phase": "observing", "cycle": cycle,
+        })
+
+        try:
+            # Phase 1: OBSERVE — capture baseline
+            baseline = hw.capture_image("_baseline.jpg")
+            if not baseline.get("success"):
+                _log_autonomy("error", f"Camera failed: {baseline.get('error')}")
+                time.sleep(10)
+                continue
+
+            # Read all available sensors
+            sensors = {}
+            temp = hw._read_temperature()
+            if temp.get("success"):
+                sensors["temperature"] = temp
+
+            # Hardware discovery
+            hw_report = hw.discover_hardware()
+            i2c_devices = hw_report.get("i2c", {}).get("devices", [])
+            gpio_pins = hw_report.get("gpio", {}).get("pins", [])
+
+            # Phase 2: THINK — ask AI what to explore
+            observation_text = (
+                f"Cycle {cycle} observation:\n"
+                f"- Camera: captured {baseline.get('width', '?')}x{baseline.get('height', '?')} image\n"
+                f"- Sensors: {json.dumps(sensors)}\n"
+                f"- I2C devices found: {json.dumps(i2c_devices)}\n"
+                f"- GPIO pins available: {gpio_pins[:10]}... ({len(gpio_pins)} total)\n"
+            )
+
+            if discoveries:
+                observation_text += "\nPrevious discoveries:\n"
+                for d in discoveries[-5:]:
+                    observation_text += f"  - {d}\n"
+
+            socketio.emit("autonomy_status", {
+                "active": True, "phase": "thinking", "cycle": cycle,
+            })
+
+            plan = cortex.quick_generate(
+                "reason",
+                observation_text + "\n"
+                "You are an autonomous robot exploring your hardware.\n"
+                "You can see through a camera and control GPIO pins and servos.\n"
+                "Suggest ONE action to try. Respond with ONLY JSON:\n"
+                '{"thinking": "why I want to try this", '
+                '"action_type": "gpio_write|servo|motor", '
+                '"params": {"pin": N, "value": 1} or {"channel": N, "angle": N}}\n'
+                "Pick something you haven't tried yet. Be curious!",
+            )
+
+            # Parse AI's suggested action
+            try:
+                from agent_ui import parse_json_response
+                action = parse_json_response(plan)
+            except Exception:
+                action = {}
+
+            thinking = action.get("thinking", "exploring...")
+            action_type = action.get("action_type", "")
+            params = action.get("params", {})
+
+            _log_autonomy("think", f"AI thinks: {thinking}")
+            _log_autonomy("action", f"Trying: {action_type} {params}")
+
+            socketio.emit("autonomy_status", {
+                "active": True, "phase": "acting", "cycle": cycle,
+                "action": action_type, "params": params,
+            })
+
+            # Phase 3: ACT — execute the suggested action
+            act_result = "No action taken"
+            if action_type == "gpio_write":
+                pin = int(params.get("pin", 0))
+                value = int(params.get("value", 1))
+                result = hw.gpio_write(pin, value)
+                act_result = f"GPIO pin {pin} → {'HIGH' if value else 'LOW'}: {result}"
+            elif action_type == "servo":
+                ch = int(params.get("channel", 0))
+                angle = int(params.get("angle", 90))
+                result = hw.move_servo(channel=ch, angle=angle)
+                act_result = f"Servo ch{ch} → {angle}°: {result}"
+            elif action_type == "motor":
+                ch = int(params.get("channel", 0))
+                speed = float(params.get("speed", 0.5))
+                result = hw.set_motor_speed(channel=ch, speed=speed)
+                act_result = f"Motor ch{ch} speed={speed}: {result}"
+                time.sleep(1)
+                hw.set_motor_speed(channel=ch, speed=0)  # Stop after 1 sec
+
+            _log_autonomy("result", act_result)
+            time.sleep(0.5)  # Wait for physical movement
+
+            # Phase 4: VERIFY — capture after action and compare
+            after = hw.capture_image("_after_action.jpg")
+            if after.get("success") and baseline.get("success"):
+                diff = hw.compare_images(
+                    baseline["filepath"], after["filepath"]
+                )
+                changed = diff.get("changed", False)
+                change_pct = diff.get("change_pct", 0)
+
+                socketio.emit("autonomy_status", {
+                    "active": True, "phase": "verifying", "cycle": cycle,
+                    "changed": changed, "change_pct": change_pct,
+                })
+
+                _log_autonomy("verify",
+                              f"Visual change: {change_pct}% "
+                              f"({'MOVEMENT DETECTED' if changed else 'no change'})")
+
+                # Phase 5: LEARN — if change detected, remember what worked
+                if changed:
+                    discovery = (
+                        f"{action_type} {params} caused {change_pct:.1f}% visual change "
+                        f"in {len(diff.get('regions', []))} regions"
+                    )
+                    discoveries.append(discovery)
+                    _log_autonomy("discover", f"🎯 {discovery}")
+
+                    # Store in memory for future use
+                    if memory:
+                        try:
+                            memory.store(
+                                f"hardware_discovery: {discovery}",
+                                f"Autonomous exploration cycle {cycle}: "
+                                f"Action {action_type} with {params} "
+                                f"produced {change_pct}% visual change",
+                                domain="hardware",
+                            )
+                        except Exception:
+                            pass
+
+                    socketio.emit("autonomy_discovery", {
+                        "cycle": cycle,
+                        "action_type": action_type,
+                        "params": params,
+                        "change_pct": change_pct,
+                        "discovery": discovery,
+                    })
+
+        except Exception as e:
+            _log_autonomy("error", f"Cycle {cycle} error: {e}")
+
+        # Wait between cycles (don't burn CPU)
+        for _ in range(100):  # 10 seconds, but check if stopped
+            if not _autonomy_active:
+                break
+            time.sleep(0.1)
+
+    _log_autonomy("system", "Autonomous exploration stopped")
+    socketio.emit("autonomy_status", {"active": False, "phase": "stopped"})
+    # Safety: stop all motors when autonomy ends
+    if _hw_controller:
+        _hw_controller.stop_all_motors()
+
+
+def _log_autonomy(level, message):
+    """Log an autonomy event."""
+    entry = {"time": time.time(), "level": level, "message": message}
+    _autonomy_log.append(entry)
+    if len(_autonomy_log) > 500:
+        _autonomy_log[:] = _autonomy_log[-300:]
+    print(f"[AUTONOMY] [{level}] {message}", flush=True)
+
+
+@app.route("/api/autonomy/start", methods=["POST"])
+def autonomy_start():
+    """Start autonomous hardware exploration."""
+    global _autonomy_active, _autonomy_thread, _hw_controller
+
+    if _autonomy_active:
+        return json.dumps({"status": "already_running"})
+
+    if not _hardware_available:
+        return json.dumps({"error": "Hardware module not available"}), 400
+
+    if _hw_controller is None:
+        ws = app.config.get("WORKSPACE", "./workspace")
+        _hw_controller = HardwareController(workspace=ws)
+
+    _autonomy_active = True
+    _autonomy_thread = threading.Thread(target=_autonomy_loop, daemon=True)
+    _autonomy_thread.start()
+    return json.dumps({"status": "started"})
+
+
+@app.route("/api/autonomy/stop", methods=["POST"])
+def autonomy_stop():
+    """Stop autonomous exploration and halt all motors."""
+    global _autonomy_active
+    _autonomy_active = False
+    if _hw_controller:
+        _hw_controller.stop_all_motors()
+    return json.dumps({"status": "stopping"})
+
+
+@app.route("/api/autonomy/status")
+def autonomy_status():
+    """Get autonomy loop status and recent log."""
+    return json.dumps({
+        "active": _autonomy_active,
+        "log": _autonomy_log[-50:],
+        "discoveries": [
+            e["message"] for e in _autonomy_log
+            if e["level"] == "discover"
+        ],
+    })
+
+
 # ── Webhook / Event-Driven API ──────────────────────────────────
 
 _webhook_secret = os.environ.get("WEBHOOK_SECRET", "")
