@@ -398,7 +398,11 @@ PROVIDER_MODELS = {
         "claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022",
         "claude-3-5-haiku-20241022", "claude-3-opus-20240229",
     ],
-    "openai_compatible": [],
+    "openai_compatible": [
+        "llama3.1:8b", "llama3.2:3b", "mistral:7b", "mixtral:8x7b",
+        "phi3:mini", "gemma2:9b", "gemma2:2b", "codellama:7b",
+        "codellama:34b", "deepseek-coder-v2:16b", "tinyllama:1.1b",
+    ],
 }
 
 DEFAULT_CONFIG = {

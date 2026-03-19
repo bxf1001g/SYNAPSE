@@ -9,6 +9,8 @@
 *Two AI agents. Multiple AI brains. One self-evolving system.*
 
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://python.org)
+[![Local + Cloud](https://img.shields.io/badge/Runs-Local%20%7C%20Cloud-brightgreen)](#-quick-start)
+[![Ollama](https://img.shields.io/badge/Ollama-Supported-orange?logo=ollama)](#-local-mode-ollama--jetson)
 [![Cloud Run](https://img.shields.io/badge/Cloud%20Run-Ready-4285F4?logo=googlecloud&logoColor=white)](#-cloud-run-deployment)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -213,45 +215,105 @@ Full multimodal interaction:
 
 ## 🚀 Quick Start
 
-### 1. Install
+### Clone & Setup (interactive wizard)
 
 ```bash
 git clone https://github.com/bxf1001g/SYNAPSE.git
 cd SYNAPSE
-pip install -r requirements.txt
+python setup.py
 ```
 
-### 2. Configure
+The setup wizard will ask you:
+1. **Local or Cloud?** — Run models on your hardware (free, private) or use cloud APIs
+2. **Choose model** — Ollama models for local, or Gemini/OpenAI/Claude for cloud
+3. **Optional integrations** — Telegram bot, GitHub token
+4. **Install dependencies** — Automatically runs `pip install`
 
-**Option A: Web UI (recommended)**
-Just launch SYNAPSE and click the ⚙ gear icon to configure any provider — Gemini, OpenAI, Anthropic, GitHub, or any OpenAI-compatible API.
+Then start SYNAPSE:
 
-**Option B: Environment variables**
 ```bash
-# Windows
-set GEMINI_API_KEY=your-gemini-api-key
-set GITHUB_TOKEN=your-github-token     # optional
+python agent_ui.py
+# Open http://localhost:8080
+```
 
+> **Tip:** For self-evolution support, use the launcher: `python synapse.py`
+
+---
+
+## 🖥 Local Mode (Ollama / Jetson)
+
+Run SYNAPSE **100% locally** with no cloud APIs, no internet required after setup.
+
+### Supported Hardware
+| Hardware | Recommended Models | Performance |
+|----------|-------------------|-------------|
+| **NVIDIA Jetson Orin** (32-67 TOPS) | Llama 3.1 8B, Mistral 7B, Phi-3 Mini | Excellent |
+| **Desktop GPU** (8GB+ VRAM) | Llama 3.1 8B, DeepSeek Coder V2, Mixtral 8x7B | Great |
+| **CPU Only** | Phi-3 Mini, TinyLlama 1.1B, Gemma 2 2B | Usable |
+
+### Setup Steps
+
+1. **Install Ollama**
+   ```bash
+   # Linux / Jetson
+   curl -fsSL https://ollama.com/install.sh | sh
+
+   # macOS
+   brew install ollama
+
+   # Windows — download from https://ollama.com
+   ```
+
+2. **Pull a model**
+   ```bash
+   ollama pull llama3.1:8b      # Best general-purpose 8B model
+   # or: ollama pull mistral:7b  # Fast, great for coding
+   # or: ollama pull phi3:mini   # Lightweight, good for CPU
+   ```
+
+3. **Run the setup wizard**
+   ```bash
+   python setup.py   # Choose "local" → select your hardware → pick model
+   ```
+
+4. **Start SYNAPSE**
+   ```bash
+   ollama serve &     # Start Ollama server (if not already running)
+   python agent_ui.py
+   ```
+
+### Jetson Orin Nano Notes
+- See [Ollama Jetson guide](https://ollama.com/blog/jetson) for optimized setup
+- 8B models run well on the 8GB variant; 4B or smaller recommended for 4GB
+- The 67 TOPS NPU is used by Ollama for acceleration automatically
+- SYNAPSE uses ChromaDB for local vector memory (no Firestore needed)
+
+---
+
+## ☁ Cloud Mode
+
+Use powerful cloud AI APIs (Gemini, GPT-4, Claude). Requires API key + internet.
+
+### Option A: Interactive Setup
+
+```bash
+python setup.py    # Choose "cloud" → pick provider → enter API key
+python agent_ui.py
+```
+
+### Option B: Environment Variables
+
+```bash
 # Linux/Mac
 export GEMINI_API_KEY=your-gemini-api-key
-export GITHUB_TOKEN=your-github-token   # optional
+
+# Windows
+set GEMINI_API_KEY=your-gemini-api-key
 ```
 
-> **Note:** SYNAPSE supports **multiple AI providers simultaneously**. You can configure different models for different cortices — e.g., Claude for reasoning, GPT-4o for code generation, Gemini for fast classification. Add API keys for any combination via the Settings UI.
+### Option C: Web UI
 
-### 3. Launch
-
-```bash
-# With the self-evolving launcher (recommended)
-python synapse.py --workspace ./myproject --port 5000
-
-# Or directly (no self-modification support)
-python agent_ui.py --workspace ./myproject --port 5000
-```
-
-### 4. Open
-
-Navigate to **http://localhost:5000** and start giving tasks!
+Just launch SYNAPSE and click the ⚙ gear icon to configure any provider.
 
 ---
 
@@ -299,6 +361,7 @@ docker run -p 8080:8080 \
 
 ```
 SYNAPSE/
+├── setup.py            # Interactive setup wizard (run first!)
 ├── synapse.py          # Immortal launcher/supervisor
 ├── agent_ui.py         # Core: Neural cortex, agents, web server, social bridges
 ├── nexus.py            # NEXUS self-modification launcher
