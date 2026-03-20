@@ -1944,7 +1944,7 @@
             }).catch(()=>{});
         }
         updateMemory();
-        setInterval(updateMemory, 30000);
+        setInterval(updateMemory, 120000);
         $('memoryBadge').addEventListener('click', () => {
             const q = prompt('Search memories:');
             if (!q) return;
@@ -2077,7 +2077,7 @@
             }).catch(()=>{});
         }
         updateHealBadge();
-        setInterval(updateHealBadge, 60000);
+        setInterval(updateHealBadge, 120000);
 
         $('healBadge').addEventListener('click', () => {
             fetch('/api/healing').then(r=>r.json()).then(d => {

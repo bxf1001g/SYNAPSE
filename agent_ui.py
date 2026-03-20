@@ -380,10 +380,13 @@ CORTEX_MODELS = {
 FAST_PATTERNS = [
     (r"^(list|show|what.*(in|inside)|dir|ls)\b", "fast"),
     (r"^(delete|remove|rm|del)\b", "fast"),
-    (r"(weather|time|date|who is|what is)\b", "create"),
+    (r"(weather|time|date|who is|what is)\b", "fast"),
+    (r"(hardware|cpu|gpu|ram|memory|system|specs|temperature|temp|device|sensor)", "fast"),
+    (r"(status|health|uptime|version|info|about|help)\b", "fast"),
     (r"(image|picture|photo|draw|sketch|mockup|design|logo|icon|visual)", "visual"),
     (r"(debug|fix|why|error|crash|optimize|refactor|architect)", "reason"),
     (r"(build|create|make|write|implement|develop|code|app|website|api)", "create"),
+    (r"(explain|analyze|compare|evaluate|plan|strategy|think)", "reason"),
 ]
 
 
@@ -1378,21 +1381,21 @@ class NeuralCortex:
             raise
 
     def classify(self, task_text):
-        """Route task to the right cortex. Fast pattern match first, then TOP model."""
+        """Route task to the right cortex. Fast pattern match first, then local model."""
         lower = task_text.lower().strip()
 
         for pattern, cortex in FAST_PATTERNS:
             if re.search(pattern, lower):
                 return cortex
 
-        # Use REASON cortex (top model) for intelligent classification
+        # Use FAST cortex (local model) for classification — avoid slow cloud API
         try:
-            provider_type, model, client = self._resolve_cortex("reason")
+            provider_type, model, client = self._resolve_cortex("fast")
             result = self._unified_generate(
                 provider_type, client, model,
                 (
                     "Classify this task into exactly ONE category:\n"
-                    "- fast: simple queries, file ops, listing, deleting\n"
+                    "- fast: simple queries, file ops, listing, deleting, status checks\n"
                     "- reason: debugging, optimization, architecture, complex analysis\n"
                     "- create: building apps, writing code, creative solutions\n"
                     "- visual: generating images, UI design, mockups, diagrams\n\n"
