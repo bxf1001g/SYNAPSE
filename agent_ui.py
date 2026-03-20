@@ -410,16 +410,18 @@ PROVIDER_MODELS = {
     "nvidia": [
         "meta/llama-3.3-70b-instruct",
         "meta/llama-3.1-8b-instruct",
+        "meta/llama-3.1-70b-instruct",
         "meta/llama-3.1-405b-instruct",
-        "nvidia/llama-3.1-nemotron-70b-instruct",
-        "mistralai/mistral-large-2-instruct",
+        "deepseek-ai/deepseek-r1-distill-llama-8b",
+        "deepseek-ai/deepseek-r1-distill-qwen-32b",
         "mistralai/mistral-7b-instruct-v0.3",
-        "google/gemma-2-27b-it",
+        "mistralai/mistral-large-2-instruct",
         "google/gemma-2-9b-it",
-        "microsoft/phi-3-medium-128k-instruct",
-        "deepseek-ai/deepseek-r1",
-        "qwen/qwen2.5-72b-instruct",
-        "nvidia/nemotron-mini-4b-instruct",
+        "google/gemma-2-27b-it",
+        "google/gemma-3-27b-it",
+        "microsoft/phi-3-mini-128k-instruct",
+        "microsoft/phi-3.5-mini-instruct",
+        "nvidia/llama-3.1-nemotron-70b-instruct",
     ],
     "openai_compatible": [
         "llama3.1:8b", "llama3.2:3b", "mistral:7b", "mixtral:8x7b",
@@ -451,8 +453,68 @@ def detect_ollama_models(base_url="http://localhost:11434"):
         return cache["models"]
 
 
+# Cache for detected NVIDIA models
+_nvidia_models_cache = {"models": [], "last_check": 0}
+
+
+def detect_nvidia_models():
+    """Query NVIDIA NIM API for models available to the user's API key."""
+    import urllib.request
+    cache = _nvidia_models_cache
+    now = time.time()
+    if cache["models"] and now - cache["last_check"] < 300:
+        return cache["models"]
+
+    # Need API key from config
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        cfg_path = os.path.join(base_dir, ".synapse.json")
+        if not os.path.exists(cfg_path):
+            return cache["models"]
+        with open(cfg_path, "r") as f:
+            cfg = json.load(f)
+        api_key = cfg.get("providers", {}).get("nvidia", {}).get("api_key", "")
+        if not api_key:
+            return cache["models"]
+
+        base_url = cfg.get("providers", {}).get("nvidia", {}).get(
+            "base_url", "https://integrate.api.nvidia.com/v1"
+        )
+        req = urllib.request.Request(
+            f"{base_url}/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+
+        # Filter to chat-capable models (skip embedding, vision-only, etc.)
+        chat_keywords = ("instruct", "chat", "it", "r1", "large", "medium", "small",
+                         "nemotron", "maverick", "scout", "deepseek", "mistral")
+        models = []
+        for m in data.get("data", []):
+            mid = m.get("id", "")
+            if any(kw in mid.lower() for kw in chat_keywords):
+                models.append(mid)
+
+        # Sort: popular models first
+        priority = ["meta/llama-3.3-70b", "deepseek-ai/deepseek", "mistralai/mistral",
+                     "meta/llama-3.1", "google/gemma", "microsoft/phi", "nvidia/"]
+        def sort_key(name):
+            for i, p in enumerate(priority):
+                if p in name:
+                    return (i, name)
+            return (len(priority), name)
+        models.sort(key=sort_key)
+
+        cache["models"] = models
+        cache["last_check"] = now
+        return models
+    except Exception:
+        return cache["models"]
+
+
 def get_provider_models_with_ollama():
-    """Return PROVIDER_MODELS with live Ollama models merged in."""
+    """Return PROVIDER_MODELS with live Ollama + NVIDIA models merged in."""
     result = dict(PROVIDER_MODELS)
     ollama = detect_ollama_models()
     if ollama:
@@ -461,6 +523,9 @@ def get_provider_models_with_ollama():
             if m not in merged:
                 merged.append(m)
         result["openai_compatible"] = merged
+    nvidia = detect_nvidia_models()
+    if nvidia:
+        result["nvidia"] = nvidia
     return result
 
 DEFAULT_CONFIG = {
@@ -1287,6 +1352,29 @@ class NeuralCortex:
                         model="gemini-3-flash-preview", config=gen_cfg, contents=prompt
                     )
                     return r.text
+                elif provider_type == "nvidia":
+                    # Try popular free models as fallback
+                    nvidia_fallbacks = [
+                        "meta/llama-3.1-8b-instruct",
+                        "meta/llama-3.1-70b-instruct",
+                        "google/gemma-2-9b-it",
+                        "microsoft/phi-3-mini-128k-instruct",
+                        "mistralai/mistral-7b-instruct-v0.3",
+                    ]
+                    for fb in nvidia_fallbacks:
+                        if fb == model:
+                            continue
+                        print(f"[CORTEX] NVIDIA model '{model}' failed, trying '{fb}'")
+                        try:
+                            r = client.chat.completions.create(
+                                model=fb,
+                                messages=messages,
+                                temperature=temperature,
+                                max_tokens=max_tokens,
+                            )
+                            return r.choices[0].message.content
+                        except Exception:
+                            continue
             raise
 
     def classify(self, task_text):
@@ -8985,6 +9073,43 @@ def get_ollama_models():
     """Detect and return installed Ollama models."""
     models = detect_ollama_models()
     return json.dumps({"models": models, "count": len(models)})
+
+
+@app.route("/api/nvidia/models")
+def get_nvidia_models():
+    """Detect and return NVIDIA NIM models available to the user."""
+    models = detect_nvidia_models()
+    return json.dumps({"models": models, "count": len(models)})
+
+
+@app.route("/api/nvidia/test", methods=["POST"])
+def test_nvidia():
+    """Test NVIDIA API key with a simple chat completion."""
+    data = request.get_json() or {}
+    api_key = data.get("api_key", "")
+    model = data.get("model", "meta/llama-3.1-8b-instruct")
+
+    if not api_key:
+        return json.dumps({"ok": False, "error": "No API key provided"}), 400
+
+    try:
+        from openai import OpenAI as _OAI
+        client = _OAI(
+            base_url="https://integrate.api.nvidia.com/v1",
+            api_key=api_key,
+        )
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "Say hello in one word."}],
+            max_tokens=10,
+        )
+        return json.dumps({
+            "ok": True,
+            "model": model,
+            "reply": resp.choices[0].message.content.strip(),
+        })
+    except Exception as e:
+        return json.dumps({"ok": False, "error": str(e)}), 500
 
 
 # ── Neural Council API ──────────────────────────────────────────

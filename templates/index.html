@@ -1380,6 +1380,11 @@
                 </div>
                 <label>API Key</label>
                 <input type="password" class="prov-key" placeholder="nvapi-..." autocomplete="off">
+                <div style="display:flex;gap:8px;margin-top:6px">
+                    <button class="btn-send" id="btnNvidiaDetect" style="font-size:0.7rem;padding:4px 10px;background:#76b900" onclick="detectNvidiaModels()">🔍 Detect Available Models</button>
+                    <button class="btn-send" id="btnNvidiaTest" style="font-size:0.7rem;padding:4px 10px;background:#444" onclick="testNvidiaKey()">⚡ Test API Key</button>
+                </div>
+                <div id="nvidiaModelStatus" style="font-size:0.7rem;color:var(--text-dim);margin-top:6px"></div>
                 <div class="install-hint">
                     Free API key → <a href="https://build.nvidia.com/" target="_blank" style="color:#76b900">build.nvidia.com</a>
                     · Llama 3.3 70B, DeepSeek R1, Mistral Large &amp; more
@@ -1754,6 +1759,54 @@
                 setTimeout(() => setStatus('idle',''), 2000);
             });
         });
+
+        // ── NVIDIA Model Detection & Testing ─────────
+        function detectNvidiaModels() {
+            const statusEl = document.getElementById('nvidiaModelStatus');
+            statusEl.textContent = '⏳ Detecting available models...';
+            statusEl.style.color = '#76b900';
+            fetch('/api/nvidia/models').then(r=>r.json()).then(data => {
+                if (data.models && data.models.length > 0) {
+                    statusEl.innerHTML = '✅ <b>' + data.count + ' models</b> available. Top: ' +
+                        data.models.slice(0, 5).map(m => '<code style="font-size:0.65rem;background:#222;padding:1px 4px;border-radius:3px">'+m+'</code>').join(', ');
+                    statusEl.style.color = '#76b900';
+                } else {
+                    statusEl.textContent = '⚠️ No models detected. Save your API key first, then retry.';
+                    statusEl.style.color = '#f59e0b';
+                }
+            }).catch(e => {
+                statusEl.textContent = '❌ Error: ' + e.message;
+                statusEl.style.color = '#ef4444';
+            });
+        }
+        function testNvidiaKey() {
+            const statusEl = document.getElementById('nvidiaModelStatus');
+            const keyInput = document.querySelector('[data-prov="nvidia"] .prov-key');
+            const apiKey = keyInput ? keyInput.value : '';
+            if (!apiKey || apiKey.startsWith('•')) {
+                statusEl.textContent = '⚠️ Enter your NVIDIA API key first';
+                statusEl.style.color = '#f59e0b';
+                return;
+            }
+            statusEl.textContent = '⏳ Testing API key with meta/llama-3.1-8b-instruct...';
+            statusEl.style.color = '#76b900';
+            fetch('/api/nvidia/test', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ api_key: apiKey, model: 'meta/llama-3.1-8b-instruct' }),
+            }).then(r=>r.json()).then(data => {
+                if (data.ok) {
+                    statusEl.innerHTML = '✅ API key works! Model replied: <i>"' + data.reply + '"</i>';
+                    statusEl.style.color = '#76b900';
+                } else {
+                    statusEl.textContent = '❌ ' + data.error;
+                    statusEl.style.color = '#ef4444';
+                }
+            }).catch(e => {
+                statusEl.textContent = '❌ Error: ' + e.message;
+                statusEl.style.color = '#ef4444';
+            });
+        }
 
         // ── Voice Input (Web Speech API) ────────────
         const btnVoice = $('btnVoice');
