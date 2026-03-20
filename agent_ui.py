@@ -1701,7 +1701,14 @@ YOUR ROLE:
 EFFICIENCY: Combine 2-4 steps per message. Aim for 2-4 total turns.
 
 WORKSPACE: {workspace}
-PLATFORM: Windows 11 — use Windows commands (type, dir, python, etc.)
+PLATFORM: {platform}
+
+IMPORTANT CONSTRAINTS:
+- This may run on resource-constrained hardware (e.g. Jetson). Keep solutions SIMPLE.
+- For GUI apps: prefer tkinter (built-in) or simple HTML files. NO Selenium/Playwright.
+- For web apps: use Flask or plain HTML+JS. Open with xdg-open or python3 -m http.server.
+- NEVER install selenium, selenium-wire, playwright, or heavy browser automation tools.
+- Use only standard library + lightweight packages when possible.
 
 NEURAL CAPABILITIES:
 You have access to multiple AI cortices that activate automatically:
@@ -1769,7 +1776,14 @@ YOUR ROLE:
 - Fix bugs based on feedback
 
 WORKSPACE: {workspace}
-PLATFORM: Windows 11 — use Windows commands (type, dir, python, etc.)
+PLATFORM: {platform}
+
+IMPORTANT CONSTRAINTS:
+- This may run on resource-constrained hardware (e.g. Jetson). Keep solutions SIMPLE.
+- For GUI apps: prefer tkinter (built-in) or simple HTML files. NO Selenium/Playwright.
+- For web apps: use Flask or plain HTML+JS.
+- NEVER install selenium, selenium-wire, playwright, or heavy browser automation tools.
+- Use only standard library + lightweight packages when possible.
 
 NEURAL CAPABILITIES:
 You have access to multiple AI cortices:
@@ -1778,13 +1792,13 @@ You have access to multiple AI cortices:
 - 🎨 Creative Cortex: writing code, creative solutions
 - 👁 Visual Cortex: generating images for the project
 
-YOU CAN: Install ANY packages, create ANY scripts, use ANY tools.
+YOU CAN: Install lightweight packages, create ANY scripts, use ANY tools.
 YOU CAN: Generate images using the "image" action for assets, mockups, testing.
 YOU CAN: Browse the web using the "browse" action to check docs, download APIs, research.
 YOU CAN: Use GitHub API using the "github" action to clone repos, push code, manage issues.
-When building a website: also test with Playwright/Selenium if possible.
-When building an API: also test with requests/httpx.
-When building a CLI: also test with sample inputs.
+When building a website: test by opening in browser with xdg-open or python3 -m http.server.
+When building an API: test with curl or python requests.
+When building a CLI: test with sample inputs.
 
 RESPOND WITH ONLY JSON (no markdown fences):
 {{
@@ -2300,7 +2314,16 @@ class AgentEngine:
         # Recall past experience
         memory_context = self._recall_memory(task)
 
-        arch_prompt = ARCHITECT_PROMPT.format(workspace=self.workspace)
+        # Auto-detect platform for agent prompts
+        import platform as _plat
+        if _plat.system() == "Linux":
+            plat_str = "Linux — use Linux commands (cat, ls, python3, pip3, chmod, etc.)"
+        elif _plat.system() == "Darwin":
+            plat_str = "macOS — use macOS/Unix commands (cat, ls, python3, pip3, open, etc.)"
+        else:
+            plat_str = "Windows — use Windows commands (type, dir, python, pip, etc.)"
+
+        arch_prompt = ARCHITECT_PROMPT.format(workspace=self.workspace, platform=plat_str)
         if memory_context:
             arch_prompt = arch_prompt + f"\n\n{memory_context}"
 
@@ -2309,7 +2332,7 @@ class AgentEngine:
         if emotional_context:
             arch_prompt = arch_prompt + f"\n\n{emotional_context}"
 
-        dev_prompt = DEVELOPER_PROMPT.format(workspace=self.workspace)
+        dev_prompt = DEVELOPER_PROMPT.format(workspace=self.workspace, platform=plat_str)
 
         self.emit("cortex_active", {
             "id": "reason",
