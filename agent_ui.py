@@ -1323,6 +1323,37 @@ class NeuralCortex:
             raise ValueError(f"Unknown provider: {provider_type}")
         except Exception as e:
             error_msg = str(e)
+
+            # ── CUDA OOM: local Ollama ran out of GPU memory → fallback to NVIDIA cloud ──
+            if provider_type == "openai_compatible" and (
+                "out of memory" in error_msg.lower()
+                or "cudamalloc" in error_msg.lower()
+                or "cuda" in error_msg.lower() and "memory" in error_msg.lower()
+            ):
+                print(f"[CORTEX] ⚠ CUDA OOM on local model '{model}' — falling back to NVIDIA cloud")
+                try:
+                    nvidia_cfg = self.config.get("providers", {}).get("nvidia", {})
+                    nv_key = nvidia_cfg.get("api_key", "")
+                    if nv_key:
+                        from openai import OpenAI as _OAI
+                        nv_client = _OAI(
+                            base_url=nvidia_cfg.get("base_url", "https://integrate.api.nvidia.com/v1"),
+                            api_key=nv_key,
+                        )
+                        nv_model = "meta/llama-3.1-8b-instruct"
+                        msgs = []
+                        if system_prompt:
+                            msgs.append({"role": "system", "content": system_prompt})
+                        msgs.append({"role": "user", "content": prompt})
+                        r = nv_client.chat.completions.create(
+                            model=nv_model, messages=msgs,
+                            temperature=temperature, max_tokens=max_tokens,
+                        )
+                        print(f"[CORTEX] ✓ NVIDIA cloud fallback succeeded ({nv_model})")
+                        return r.choices[0].message.content
+                except Exception as nv_err:
+                    print(f"[CORTEX] NVIDIA fallback also failed: {nv_err}")
+
             if "not found" in error_msg.lower() or "invalid" in error_msg.lower():
                 # Model not available — try fallback
                 if provider_type == "openai_compatible":
