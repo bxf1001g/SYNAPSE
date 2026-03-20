@@ -1312,7 +1312,32 @@
     <!-- ── Settings Modal ─────────────────────────── -->
     <div class="settings-overlay hidden" id="settingsModal">
         <div class="settings-card">
-            <h2>⚙ SYNAPSE Settings — AI Providers</h2>
+            <h2>⚙ SYNAPSE Settings</h2>
+
+            <!-- System Info Banner -->
+            <div id="sysInfoBanner" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:0.75rem;color:var(--text-dim);display:none">
+                <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+                    <span id="sysOS">🖥 —</span>
+                    <span id="sysCPU">💻 —</span>
+                    <span id="sysRAM">🧠 —</span>
+                    <span id="sysGPU">🎮 —</span>
+                    <span id="sysPython">🐍 —</span>
+                    <span id="sysOllama" style="color:#f97316">⬡ —</span>
+                </div>
+            </div>
+
+            <!-- Telegram Quick Config -->
+            <div style="background:rgba(59,130,246,0.05);border:1px solid rgba(59,130,246,0.15);border-radius:8px;padding:12px 14px;margin-bottom:16px">
+                <h3 style="margin:0 0 8px;font-size:0.85rem;color:#3b82f6">📱 Telegram Bot</h3>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <input type="password" id="settingsTgToken" placeholder="Bot token (from @BotFather)" style="flex:1;min-width:180px;padding:6px 10px;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.1);border-radius:4px;color:#fff;font-size:0.75rem" autocomplete="off">
+                    <input type="text" id="settingsTgChatId" placeholder="Chat ID" style="width:110px;padding:6px 10px;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.1);border-radius:4px;color:#fff;font-size:0.75rem" autocomplete="off">
+                    <button id="btnTgConnect" style="padding:6px 12px;background:#3b82f6;color:#fff;border:none;border-radius:4px;font-size:0.7rem;cursor:pointer">Connect</button>
+                    <span id="tgStatusDot" style="font-size:0.7rem">⚪ not connected</span>
+                </div>
+            </div>
+
+            <h3 style="margin:0 0 10px;font-size:0.9rem;color:var(--text-dim)">AI Providers</h3>
 
             <div class="settings-section" data-prov="gemini">
                 <h3><span class="prov-dot" style="background:#4285F4"></span> Google Gemini</h3>
@@ -1345,6 +1370,20 @@
                 <label>API Key</label>
                 <input type="password" class="prov-key" placeholder="sk-ant-..." autocomplete="off">
                 <div class="install-hint">pip install anthropic</div>
+            </div>
+
+            <div class="settings-section" data-prov="nvidia">
+                <h3><span class="prov-dot" style="background:#76b900"></span> NVIDIA NIM <span style="font-size:0.65rem;background:#76b900;color:#000;padding:2px 6px;border-radius:4px;margin-left:6px">FREE</span></h3>
+                <div class="toggle-row">
+                    <span style="font-size:0.75rem;color:var(--text-dim)">Enabled</span>
+                    <label class="toggle-switch"><input type="checkbox" class="prov-enabled"><span class="toggle-track"></span></label>
+                </div>
+                <label>API Key</label>
+                <input type="password" class="prov-key" placeholder="nvapi-..." autocomplete="off">
+                <div class="install-hint">
+                    Free API key → <a href="https://build.nvidia.com/" target="_blank" style="color:#76b900">build.nvidia.com</a>
+                    · Llama 3.3 70B, DeepSeek R1, Mistral Large &amp; more
+                </div>
             </div>
 
             <div class="settings-section" data-prov="openai_compatible">
@@ -1597,6 +1636,46 @@
                 buildCortexGrid(data);
                 settingsModal.classList.remove('hidden');
             });
+            // Load system info
+            fetch('/api/system').then(r=>r.json()).then(info => {
+                const b = $('sysInfoBanner');
+                b.style.display = 'block';
+                $('sysOS').textContent = '🖥 ' + (info.os || '?');
+                $('sysCPU').textContent = '💻 ' + (info.cpu || '?');
+                $('sysRAM').textContent = '🧠 ' + (info.ram || '?');
+                $('sysGPU').textContent = '🎮 ' + (info.gpu || 'none');
+                $('sysPython').textContent = '🐍 Python ' + (info.python || '?');
+                const oll = info.ollama;
+                $('sysOllama').textContent = '⬡ Ollama: ' + (oll && oll.models ? oll.models.join(', ') : 'not running');
+                $('sysOllama').style.color = oll && oll.running ? '#76b900' : '#f97316';
+            }).catch(()=>{});
+            // Load Telegram status
+            fetch('/api/telegram/status').then(r=>r.json()).then(tg => {
+                const dot = $('tgStatusDot');
+                if (tg.active) { dot.textContent = '🟢 connected'; dot.style.color = '#22c55e'; }
+                else if (tg.configured) { dot.textContent = '🟡 configured'; dot.style.color = '#eab308'; }
+                else { dot.textContent = '⚪ not connected'; dot.style.color = '#888'; }
+            }).catch(()=>{});
+        });
+
+        // Telegram connect from settings panel
+        $('btnTgConnect').addEventListener('click', () => {
+            const token = $('settingsTgToken').value.trim();
+            const chatId = $('settingsTgChatId').value.trim();
+            if (!token || !chatId) { $('tgStatusDot').textContent = '❌ need token + chat ID'; return; }
+            $('tgStatusDot').textContent = '⏳ connecting...';
+            fetch('/api/telegram/connect', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({token, chat_id: chatId})
+            }).then(r=>r.json()).then(r => {
+                if (r.status === 'started' || r.status === 'already_running') {
+                    $('tgStatusDot').textContent = '🟢 connected!';
+                    $('tgStatusDot').style.color = '#22c55e';
+                } else {
+                    $('tgStatusDot').textContent = '❌ ' + (r.message || 'failed');
+                    $('tgStatusDot').style.color = '#ef4444';
+                }
+            }).catch(e => { $('tgStatusDot').textContent = '❌ error'; });
         });
 
         function buildCortexGrid(data) {

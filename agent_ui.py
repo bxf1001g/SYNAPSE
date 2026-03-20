@@ -8868,6 +8868,81 @@ def get_settings():
     return json.dumps({"settings": safe, "provider_models": get_provider_models_with_ollama()})
 
 
+@app.route("/api/system")
+def api_system_info():
+    """Return system hardware info — OS, CPU, RAM, GPU, Python, Ollama status."""
+    import platform
+    import shutil
+
+    info = {
+        "os": f"{platform.system()} {platform.release()}",
+        "arch": platform.machine(),
+        "python": platform.python_version(),
+        "cpu": "unknown",
+        "ram": "unknown",
+        "gpu": "none",
+        "ollama": {"running": False, "models": []},
+    }
+
+    # CPU info
+    try:
+        cpu_count = os.cpu_count() or 0
+        info["cpu"] = f"{platform.processor() or platform.machine()} ({cpu_count} cores)"
+    except Exception:
+        pass
+
+    # RAM info
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        info["ram"] = f"{mem.total // (1024**3)}GB total, {mem.percent}% used"
+    except ImportError:
+        if platform.system() == "Linux":
+            try:
+                with open("/proc/meminfo") as f:
+                    lines = f.readlines()
+                total_kb = int(lines[0].split()[1])
+                avail_kb = int(lines[2].split()[1])
+                used_pct = round(100 * (1 - avail_kb / total_kb))
+                info["ram"] = f"{total_kb // (1024*1024)}GB total, {used_pct}% used"
+            except Exception:
+                pass
+
+    # GPU detection
+    try:
+        # Jetson
+        if os.path.exists("/proc/device-tree/model"):
+            with open("/proc/device-tree/model") as f:
+                model = f.read().strip().rstrip("\x00")
+            info["gpu"] = model
+        elif shutil.which("nvidia-smi"):
+            import subprocess
+            r = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                parts = r.stdout.strip().split(",")
+                name = parts[0].strip()
+                vram = parts[1].strip() if len(parts) > 1 else "?"
+                info["gpu"] = f"{name} ({vram}MB)"
+    except Exception:
+        pass
+
+    # Ollama status
+    try:
+        ollama_models = detect_ollama_models()
+        info["ollama"] = {
+            "running": bool(ollama_models),
+            "models": ollama_models,
+            "installed": bool(shutil.which("ollama")),
+        }
+    except Exception:
+        pass
+
+    return json.dumps(info)
+
+
 @app.route("/api/settings", methods=["POST"])
 def post_settings():
     data = request.get_json()
