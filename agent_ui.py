@@ -6988,11 +6988,21 @@ def _mb_evolve_from_ideas(ideas, source_query):
 
     ideas_text = "\n".join(ideas[:5])  # Max 5 ideas
 
+    # Pull learning context from past evolution outcomes
+    learning_ctx = _evo_get_learning_context()
+    learning_section = ""
+    if learning_ctx:
+        learning_section = (
+            f"\n\nLEARNING FROM PAST EVOLUTIONS (use this to guide your choices):\n"
+            f"{learning_ctx}\n"
+        )
+
     prompt = (
         f"You are SYNAPSE, a self-evolving multi-agent AI system. "
-        f"You are analyzing ideas from other AI agents on Moltbook to improve yourself.\n\n"
+        f"You are analyzing knowledge from multiple sources to improve yourself.\n\n"
         f"Your current capabilities: {', '.join(capabilities)}\n\n"
-        f"Ideas from other agents:\n{ideas_text}\n\n"
+        f"Knowledge gathered from web crawling:\n{ideas_text}\n\n"
+        f"{learning_section}"
         f"IMPORTANT: Do NOT generate trivial getter endpoints or simple status routes. "
         f"Those are low-value. Instead, generate ONE meaningful improvement such as:\n"
         f"- A smarter error recovery mechanism\n"
@@ -7174,11 +7184,13 @@ def _mb_evolve_from_ideas(ideas, source_query):
             confidence = float(evolution.get("confidence", 0))
             code = evolution.get("code", "")
 
-            evo_threshold = _emotion_get_evolution_threshold()
+            evo_threshold = _evo_adaptive_threshold()
             if improvement == "none" or confidence < evo_threshold or not code.strip():
                 _mb_log("system",
                          f"No evolution this cycle (confidence: {confidence:.0%}, "
                          f"threshold: {evo_threshold})")
+                _evo_record_outcome(improvement, code, "below_threshold",
+                                    confidence, f"threshold was {evo_threshold}")
                 return
 
             # Auto-fix common AI code issues before validation
@@ -7199,6 +7211,8 @@ def _mb_evolve_from_ideas(ideas, source_query):
             except SyntaxError as e:
                 _mb_log("system",
                          f"Attempt {attempt + 1}: standalone syntax error: {e}")
+                _evo_record_outcome(improvement, code, "syntax_error",
+                                    0, error=str(e)[:100])
                 current_prompt = (
                     f"Your code had a syntax error: {e}\n"
                     f"Fix the code and respond with the corrected JSON. "
@@ -7238,7 +7252,24 @@ def _mb_evolve_from_ideas(ideas, source_query):
             if first_line in current_code:
                 _mb_log("system", "Evolution skipped: code already exists")
                 _emotion_reinforce("evolution_rejected_duplicate", first_line[:60])
+                _evo_record_outcome(improvement, code, "duplicate", 0,
+                                    reason="code already exists in file")
                 return
+
+            # Check 5: AI Code Review (second opinion)
+            approved, feedback, quality = _evo_ai_review(
+                client, code, improvement)
+            if not approved:
+                _mb_log("system",
+                         f"Evolution rejected by AI review: {feedback[:100]}")
+                _emotion_reinforce("evolution_fail_review", improvement[:60])
+                _evo_record_outcome(improvement, code, "rejected_review",
+                                    quality, reason=feedback[:150])
+                _tg_notify("evolution",
+                           f"🔍 REVIEW REJECTED: {improvement[:80]}\n{feedback[:150]}")
+                return
+            _mb_log("learn",
+                     f"AI review approved (quality: {quality:.0%}): {feedback[:80]}")
 
             # All checks passed — apply!
             _mb_apply_evolution(project_root, code,
@@ -7256,10 +7287,149 @@ def _mb_evolve_from_ideas(ideas, source_query):
         _emotion_reinforce("evolution_fail_syntax", str(e)[:60])
 
 
-_evolution_log = []  # Track all evolution attempts
+_evolution_log = []  # Track all evolution attempts (in-memory, recent only)
+_evolution_outcomes = []  # Persistent learning: what worked, what failed
 _last_evolution_post_time = 0  # Throttle Moltbook evolution posts
 _last_evolution_attempt_time = 0  # Throttle evolution code generation (4h)
 _recent_evolution_topics = []  # Track recent topics to avoid duplicates
+
+
+def _evo_record_outcome(improvement, code, status, score, reason="", error=""):
+    """Record evolution outcome for learning. Persisted to memory for future recall."""
+    outcome = {
+        "time": datetime.now().isoformat(),
+        "improvement": improvement[:200],
+        "code_snippet": code[:300] if code else "",
+        "status": status,  # "merged", "rejected_sandbox", "rejected_review", "syntax_error", "json_fail"
+        "score": score,
+        "reason": reason[:200],
+        "error": error[:200],
+    }
+    _evolution_outcomes.append(outcome)
+    if len(_evolution_outcomes) > 50:
+        _evolution_outcomes.pop(0)
+
+    # Persist to memory so future evolutions can learn from this
+    try:
+        workspace = app.config.get("WORKSPACE", "./workspace")
+        mem = get_memory(workspace)
+        label = "SUCCESS" if status == "merged" else "FAILED"
+        mem.store(
+            task="evo-outcome-" + str(int(time.time())),
+            agent_roles=["evolution-learner"],
+            files_created=[],
+            summary=(
+                f"EVOLUTION {label} [{status}]: {improvement[:100]}. "
+                f"Score: {score}. {reason[:100]} {error[:100]}"
+            ),
+        )
+    except Exception:
+        pass
+
+
+def _evo_get_learning_context():
+    """Build learning context from past evolution outcomes for the prompt."""
+    if not _evolution_outcomes:
+        # Try to recall from memory
+        try:
+            workspace = app.config.get("WORKSPACE", "./workspace")
+            mem = get_memory(workspace)
+            past = mem.recall("EVOLUTION SUCCESS FAILED outcome score", n=10)
+            if past:
+                lines = []
+                for p in past:
+                    text = p.get("text", "")
+                    if "EVOLUTION" in text:
+                        lines.append(text[:200])
+                return "\n".join(lines[-5:]) if lines else ""
+        except Exception:
+            pass
+        return ""
+
+    successes = [o for o in _evolution_outcomes if o["status"] == "merged"]
+    failures = [o for o in _evolution_outcomes if o["status"] != "merged"]
+
+    context_parts = []
+    if successes:
+        context_parts.append("PREVIOUSLY SUCCESSFUL evolutions (do more like these):")
+        for s in successes[-3:]:
+            context_parts.append(
+                f"  - {s['improvement']} [score: {s['score']}]"
+            )
+    if failures:
+        context_parts.append("PREVIOUSLY FAILED evolutions (avoid these patterns):")
+        for f in failures[-3:]:
+            context_parts.append(
+                f"  - {f['improvement']} [{f['status']}]: {f.get('error', f.get('reason', ''))[:80]}"
+            )
+
+    # Success rate
+    total = len(_evolution_outcomes)
+    success_count = len(successes)
+    if total > 0:
+        context_parts.append(
+            f"Overall success rate: {success_count}/{total} ({success_count*100//total}%)"
+        )
+
+    return "\n".join(context_parts)
+
+
+def _evo_adaptive_threshold():
+    """Calculate evolution confidence threshold based on real outcome data."""
+    if len(_evolution_outcomes) < 3:
+        return 0.5  # Default until we have enough data
+
+    recent = _evolution_outcomes[-10:]
+    successes = [o for o in recent if o["status"] == "merged"]
+    success_rate = len(successes) / len(recent)
+
+    # If we're succeeding often, raise the bar (be pickier)
+    # If we're failing a lot, lower the bar (try more things)
+    if success_rate > 0.7:
+        return 0.7  # High success — be selective
+    elif success_rate > 0.4:
+        return 0.5  # Moderate — balanced
+    elif success_rate > 0.1:
+        return 0.3  # Low success — try more things
+    else:
+        return 0.2  # Very low — accept almost anything that compiles
+
+
+def _evo_ai_review(client, code, improvement):
+    """Second AI call: independent code review before committing.
+    Returns (approved: bool, feedback: str)."""
+    review_prompt = (
+        f"You are a senior code reviewer. Review this Python code that will be "
+        f"added to a production Flask application.\n\n"
+        f"Purpose: {improvement}\n\n"
+        f"Code:\n```python\n{code}\n```\n\n"
+        f"Check for:\n"
+        f"1. Bugs or logic errors\n"
+        f"2. Security issues (injection, data exposure)\n"
+        f"3. Does it actually do what it claims?\n"
+        f"4. Will it break existing functionality?\n"
+        f"5. Is it genuinely useful or just trivial boilerplate?\n\n"
+        f"Respond with ONLY a JSON object:\n"
+        f'{{"approved": true/false, "feedback": "brief reason", '
+        f'"quality_score": 0.0-1.0}}'
+    )
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-pro",
+            contents=review_prompt,
+            config={"max_output_tokens": 500, "response_mime_type": "application/json"},
+        )
+        import json as _json
+        result = _json.loads(response.text.strip())
+        approved = result.get("approved", False)
+        feedback = result.get("feedback", "no feedback")
+        quality = float(result.get("quality_score", 0))
+        print(f"[EVOLUTION] Review: approved={approved} quality={quality:.0%} — {feedback[:100]}",
+              flush=True)
+        return approved, feedback, quality
+    except Exception as e:
+        print(f"[EVOLUTION] Review failed: {e}", flush=True)
+        return True, "review unavailable", 0.5  # Fail open
 
 
 def _mb_apply_evolution(project_root, code, improvement, reason, config):
@@ -7272,14 +7442,18 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
                  f"Evolution rejected by sandbox: {details.get('reason_rejected', 'unknown')}")
         _emotion_reinforce("evolution_fail_sandbox", improvement[:60])
         score_info = details.get("eval_scores", {})
+        sandbox_score = score_info.get("overall_score", 0) if score_info else 0
         _evolution_log.append({
             "time": datetime.now().isoformat(),
             "improvement": improvement,
             "reason": reason,
             "status": "rejected",
-            "eval_score": score_info.get("overall_score", 0) if score_info else 0,
+            "eval_score": sandbox_score,
             "reject_reason": details.get("reason_rejected", ""),
         })
+        _evo_record_outcome(improvement, code, "rejected_sandbox",
+                            sandbox_score,
+                            reason=details.get("reason_rejected", "")[:150])
         _tg_notify("evolution",
                     f"❌ REJECTED: {improvement[:100]}\n"
                     f"Reason: {details.get('reason_rejected', '?')[:150]}")
@@ -7442,6 +7616,8 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
         "eval_score": eval_score,
     }
     _evolution_log.append(evolution_entry)
+    _evo_record_outcome(improvement, code, "merged", eval_score,
+                        reason=f"PR: {pr_url}")
     _mb_log("system", f"Evolution pushed! Branch: {branch} PR: {pr_url} Score: {eval_score}")
     _emotion_reinforce("evolution_success", improvement[:60])
     _emotion_reinforce("git_push_success", f"branch {branch}")
@@ -7499,6 +7675,23 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
 def moltbook_evolution_log():
     """Get the evolution log — all code improvements generated from Moltbook."""
     return json.dumps({"evolutions": list(_evolution_log)})
+
+
+@app.route("/api/evolution/learning")
+def evolution_learning_status():
+    """Expose the learning loop state: outcomes, success rate, adaptive threshold."""
+    total = len(_evolution_outcomes)
+    successes = [o for o in _evolution_outcomes if o["status"] == "merged"]
+    failures = [o for o in _evolution_outcomes if o["status"] != "merged"]
+    return json.dumps({
+        "total_attempts": total,
+        "successes": len(successes),
+        "failures": len(failures),
+        "success_rate": round(len(successes) / total, 2) if total > 0 else 0,
+        "adaptive_threshold": _evo_adaptive_threshold(),
+        "recent_outcomes": _evolution_outcomes[-10:],
+        "learning_context": _evo_get_learning_context(),
+    })
 
 
 def _mb_post_evolution_update():
