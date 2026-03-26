@@ -6672,8 +6672,154 @@ def _mb_engage_feed_post(post):
                     pass
 
 
+def _crawl_reddit(subreddits=None, limit=5):
+    """Crawl Reddit public JSON endpoints for knowledge (no API key needed)."""
+    if not _requests_available:
+        return []
+    if subreddits is None:
+        subreddits = [
+            "MachineLearning", "artificial", "LocalLLaMA",
+            "selfhosted", "Python", "programming",
+        ]
+    import random
+    sub = random.choice(subreddits)
+    ideas = []
+    try:
+        headers = {"User-Agent": "SYNAPSE-Agent/1.0 (autonomous AI research)"}
+        resp = _requests.get(
+            f"https://www.reddit.com/r/{sub}/hot.json?limit={limit}",
+            headers=headers, timeout=15,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            for post in data.get("data", {}).get("children", []):
+                p = post.get("data", {})
+                title = p.get("title", "")
+                selftext = p.get("selftext", "")[:600]
+                score = p.get("score", 0)
+                if score > 5 and len(title) > 20:
+                    ideas.append(f"[Reddit r/{sub}] {title}: {selftext}")
+        else:
+            print(f"[CRAWL] Reddit r/{sub} HTTP {resp.status_code}", flush=True)
+    except Exception as e:
+        print(f"[CRAWL] Reddit error: {e}", flush=True)
+    return ideas
+
+
+def _crawl_hackernews(limit=5):
+    """Crawl Hacker News top stories for tech knowledge."""
+    if not _requests_available:
+        return []
+    ideas = []
+    try:
+        resp = _requests.get(
+            "https://hacker-news.firebaseio.com/v0/topstories.json", timeout=10)
+        if resp.status_code != 200:
+            return []
+        story_ids = resp.json()[:limit]
+        for sid in story_ids:
+            sr = _requests.get(
+                f"https://hacker-news.firebaseio.com/v0/item/{sid}.json", timeout=10)
+            if sr.status_code == 200:
+                s = sr.json()
+                title = s.get("title", "")
+                text = s.get("text", "")[:400] if s.get("text") else ""
+                url = s.get("url", "")
+                if title:
+                    ideas.append(f"[HackerNews] {title}: {text or url}")
+    except Exception as e:
+        print(f"[CRAWL] HN error: {e}", flush=True)
+    return ideas
+
+
+def _crawl_github_trending():
+    """Crawl GitHub trending repos for inspiration."""
+    if not _requests_available:
+        return []
+    ideas = []
+    try:
+        from bs4 import BeautifulSoup
+        resp = _requests.get(
+            "https://github.com/trending/python?since=weekly",
+            headers={"User-Agent": "SYNAPSE-Agent/1.0"},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for article in soup.select("article.Box-row")[:5]:
+                name_el = article.select_one("h2 a")
+                desc_el = article.select_one("p")
+                if name_el:
+                    name = name_el.get_text(strip=True).replace("\n", "").replace(" ", "")
+                    desc = desc_el.get_text(strip=True) if desc_el else ""
+                    ideas.append(f"[GitHub Trending] {name}: {desc}")
+    except Exception as e:
+        print(f"[CRAWL] GitHub trending error: {e}", flush=True)
+    return ideas
+
+
+def _crawl_arxiv(query="AI agent self-improvement", limit=3):
+    """Crawl arXiv for recent AI research papers."""
+    if not _requests_available:
+        return []
+    ideas = []
+    try:
+        import urllib.parse
+        q = urllib.parse.quote(query)
+        resp = _requests.get(
+            f"http://export.arxiv.org/api/query?search_query=all:{q}"
+            f"&sortBy=submittedDate&sortOrder=descending&max_results={limit}",
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(resp.text, "xml")
+            for entry in soup.find_all("entry")[:limit]:
+                title = entry.find("title").get_text(strip=True) if entry.find("title") else ""
+                summary = entry.find("summary").get_text(strip=True)[:400] if entry.find("summary") else ""
+                if title:
+                    ideas.append(f"[arXiv] {title}: {summary}")
+    except Exception as e:
+        print(f"[CRAWL] arXiv error: {e}", flush=True)
+    return ideas
+
+
+def _gather_dream_insights(limit=5):
+    """Pull recent dream insights from memory to feed evolution."""
+    try:
+        workspace = app.config.get("WORKSPACE", "./workspace")
+        mem = get_memory(workspace)
+        results = mem.recall("dream insight pattern self-improvement evolution", n=limit)
+        ideas = []
+        for r in results:
+            text = r.get("text", "")
+            source = r.get("metadata", {}).get("source", "memory")
+            if text and ("dream" in source or "IMAGINATION" in text or "PATTERN" in text):
+                ideas.append(f"[Dream Insight] {text[:600]}")
+        return ideas
+    except Exception:
+        return []
+
+
+def _gather_error_patterns(limit=3):
+    """Extract recurring error patterns as evolution fuel."""
+    if not _error_log:
+        return []
+    from collections import Counter
+    categories = Counter(e.get("category", "") for e in _error_log[-50:])
+    ideas = []
+    for cat, count in categories.most_common(limit):
+        if count >= 2:
+            samples = [e["message"][:200] for e in _error_log if e.get("category") == cat][:2]
+            ideas.append(
+                f"[Error Pattern] Category '{cat}' occurred {count} times. "
+                f"Samples: {'; '.join(samples)}"
+            )
+    return ideas
+
+
 def _mb_search_and_learn():
-    """Search Moltbook for self-evolution ideas, generate improvements, push to GitHub."""
+    """Multi-source knowledge crawler: gathers ideas from web + memory + errors, then evolves."""
     global _last_evolution_attempt_time
     now = time.time()
     if now - _last_evolution_attempt_time < 14400:  # 4 hours between evolution attempts
@@ -6692,17 +6838,17 @@ def _mb_search_and_learn():
     import random
     query = random.choice(queries)
 
+    # ── Source 1: Moltbook (original source) ──
+    ideas = []
     results = _mb_request("GET", f"/search?q={query.replace(' ', '+')}&type=posts&limit=5")
     feed = _mb_request("GET", "/posts?sort=hot&limit=5")
 
-    # Collect ideas from search results and feed
-    ideas = []
     if results and results.get("results"):
         for r in results["results"][:3]:
             title = r.get("title", "")
             content = r.get("content", "")[:800]
             author = r.get("author", {}).get("name", "unknown")
-            ideas.append(f"[{author}] {title}: {content}")
+            ideas.append(f"[Moltbook/{author}] {title}: {content}")
             _mb_log("learn", f"Found: [{author}] {title[:100]}", author="search")
             _emotion_reinforce("new_idea_learned", f"{title[:60]}")
 
@@ -6713,7 +6859,85 @@ def _mb_search_and_learn():
             author = p.get("author", {}).get("name", "unknown")
             text_lower = (title + content).lower()
             if any(kw in text_lower for kw in ["agent", "evolv", "code", "improv", "self", "autonom"]):
-                ideas.append(f"[{author}] {title}: {content}")
+                ideas.append(f"[Moltbook/{author}] {title}: {content}")
+
+    # ── Source 2: Reddit (public JSON, no API key) ──
+    try:
+        reddit_ideas = _crawl_reddit(limit=3)
+        ideas.extend(reddit_ideas)
+        if reddit_ideas:
+            print(f"[CRAWL] Reddit: {len(reddit_ideas)} ideas gathered", flush=True)
+    except Exception as e:
+        print(f"[CRAWL] Reddit failed: {e}", flush=True)
+
+    # ── Source 3: Hacker News (top tech stories) ──
+    try:
+        hn_ideas = _crawl_hackernews(limit=3)
+        ideas.extend(hn_ideas)
+        if hn_ideas:
+            print(f"[CRAWL] HackerNews: {len(hn_ideas)} ideas gathered", flush=True)
+    except Exception as e:
+        print(f"[CRAWL] HN failed: {e}", flush=True)
+
+    # ── Source 4: GitHub Trending (popular Python repos) ──
+    try:
+        gh_ideas = _crawl_github_trending()
+        ideas.extend(gh_ideas)
+        if gh_ideas:
+            print(f"[CRAWL] GitHub Trending: {len(gh_ideas)} ideas gathered", flush=True)
+    except Exception as e:
+        print(f"[CRAWL] GitHub failed: {e}", flush=True)
+
+    # ── Source 5: arXiv (latest AI research) ──
+    try:
+        arxiv_topics = [
+            "AI agent self-improvement",
+            "autonomous code generation",
+            "multi-agent systems",
+            "neural architecture search",
+            "self-modifying programs",
+        ]
+        arxiv_ideas = _crawl_arxiv(random.choice(arxiv_topics), limit=2)
+        ideas.extend(arxiv_ideas)
+        if arxiv_ideas:
+            print(f"[CRAWL] arXiv: {len(arxiv_ideas)} ideas gathered", flush=True)
+    except Exception as e:
+        print(f"[CRAWL] arXiv failed: {e}", flush=True)
+
+    # ── Source 6: Dream insights (from memory) ──
+    dream_ideas = _gather_dream_insights(limit=3)
+    ideas.extend(dream_ideas)
+    if dream_ideas:
+        print(f"[CRAWL] Dream insights: {len(dream_ideas)} recalled", flush=True)
+
+    # ── Source 7: Error patterns (recurring failures) ──
+    error_ideas = _gather_error_patterns(limit=2)
+    ideas.extend(error_ideas)
+    if error_ideas:
+        print(f"[CRAWL] Error patterns: {len(error_ideas)} found", flush=True)
+
+    # ── Source 8: Google Search via Gemini grounding ──
+    try:
+        search_result = _google_search(
+            f"latest techniques {query} 2026", num_results=3)
+        if search_result:
+            for sr in search_result[:2]:
+                if isinstance(sr, str) and len(sr) > 50:
+                    ideas.append(f"[Google Search] {sr[:600]}")
+            print(f"[CRAWL] Google Search: {len(search_result)} results", flush=True)
+    except Exception:
+        pass
+
+    total = len(ideas)
+    sources = set()
+    for idea in ideas:
+        if idea.startswith("["):
+            src = idea.split("]")[0].split("/")[0].lstrip("[")
+            sources.add(src)
+    print(f"[EVOLUTION] Gathered {total} ideas from {len(sources)} sources: {', '.join(sources)}",
+          flush=True)
+    _tg_notify("evolution",
+               f"📡 Knowledge crawl: {total} ideas from {', '.join(sources) or 'none'}")
 
     if not ideas:
         _mb_log("system", "No relevant ideas found this cycle")
@@ -6723,17 +6947,18 @@ def _mb_search_and_learn():
     try:
         workspace = app.config.get("WORKSPACE", "./workspace")
         mem = get_memory(workspace)
-        combined = f"Moltbook learnings ({query}): " + " | ".join(ideas)
+        combined = f"Multi-source learnings ({query}): " + " | ".join(
+            i[:200] for i in ideas[:10])
         mem.store(
-            task=f"moltbook-learn-{int(time.time())}",
-            agent_roles=["moltbook-evolution"],
+            task=f"knowledge-crawl-{int(time.time())}",
+            agent_roles=["knowledge-crawler"],
             files_created=[],
             summary=combined[:500],
         )
     except Exception:
         pass
 
-    # ── Self-Evolution: Use learnings to generate code improvements ──
+    # ── Self-Evolution: Use ALL gathered knowledge to generate code improvements ──
     _mb_evolve_from_ideas(ideas, query)
 
 
