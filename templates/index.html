@@ -801,7 +801,7 @@
         }
         .btn-settings:hover { color: var(--cyan); background: rgba(34,211,238,0.08); }
         .settings-overlay {
-            position: fixed; inset: 0; z-index: 2000;
+            position: fixed; inset: 0; z-index: 3002;
             background: rgba(4,6,14,0.9); backdrop-filter: blur(8px);
             display: flex; justify-content: center; align-items: center;
         }
@@ -950,7 +950,7 @@
             display: none; position: fixed; top: 50%; left: 50%;
             transform: translate(-50%,-50%); width: 520px; max-height: 80vh;
             background: var(--bg-card); border: 1px solid rgba(99,102,241,0.3);
-            border-radius: 12px; padding: 20px; z-index: 2000;
+            border-radius: 12px; padding: 20px; z-index: 3001;
             box-shadow: 0 20px 60px rgba(0,0,0,0.5); overflow-y: auto;
         }
         .a2a-panel.active { display: block; }
@@ -989,7 +989,7 @@
             display: none; position: fixed; top: 50%; left: 50%;
             transform: translate(-50%,-50%); width: 560px; max-height: 85vh;
             background: var(--bg-card); border: 1px solid rgba(239,68,68,0.3);
-            border-radius: 12px; padding: 20px; z-index: 2000;
+            border-radius: 12px; padding: 20px; z-index: 3001;
             box-shadow: 0 20px 60px rgba(0,0,0,0.5); overflow-y: auto;
         }
         .moltbook-panel.active { display: block; }
@@ -1178,7 +1178,7 @@
             <code style="color:#818cf8">GET /.well-known/agent.json</code> — other agents can discover SYNAPSE at this endpoint.
         </div>
     </div>
-    <div class="a2a-overlay" id="a2aOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1999"></div>
+    <div class="a2a-overlay" id="a2aOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:3000"></div>
 
     <!-- ── Moltbook Panel ───────────────────────────── -->
     <div class="moltbook-panel" id="moltbookPanel">
@@ -1206,7 +1206,7 @@
             <div style="font-size:0.65rem;color:#555" id="moltbookHeartbeat">Heartbeat: off</div>
         </div>
     </div>
-    <div class="moltbook-overlay" id="moltbookOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1999"></div>
+    <div class="moltbook-overlay" id="moltbookOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:3000"></div>
 
     <!-- ── Telegram Panel ──────────────────────────── -->
     <div class="moltbook-panel" id="telegramPanel" style="display:none;border-color:rgba(59,130,246,0.3)">
@@ -1245,7 +1245,7 @@
             <div style="font-size:0.65rem;color:#555" id="tgPollStatus">Polling: off</div>
         </div>
     </div>
-    <div id="telegramOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1999"></div>
+    <div id="telegramOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:3000"></div>
 
     <!-- ── Consciousness Panel ──────────────────────── -->
     <div class="moltbook-panel" id="consciousnessPanel" style="display:none">
@@ -1317,7 +1317,7 @@
             <div style="font-size:0.65rem;color:#555" id="cLastDream">Last dream: never</div>
         </div>
     </div>
-    <div class="moltbook-overlay" id="consciousnessOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1999"></div>
+    <div class="moltbook-overlay" id="consciousnessOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:3000"></div>
 
     <!-- ── Settings Modal ─────────────────────────── -->
     <div class="settings-overlay hidden" id="settingsModal">
@@ -1431,6 +1431,63 @@
     <!-- ── JavaScript ─────────────────────────────────────── -->
     <script>
         const socket = io();
+
+        // ── Session Persistence ──────────────────────────────
+        const SESS_KEY = 'synapse_session';
+        const MSG_KEY = 'synapse_messages';
+
+        let currentSessionId = localStorage.getItem(SESS_KEY);
+        if (!currentSessionId) {
+            currentSessionId = 'sess_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+            localStorage.setItem(SESS_KEY, currentSessionId);
+        }
+
+        function persistMsg(type, data) {
+            try {
+                const msgs = JSON.parse(localStorage.getItem(MSG_KEY) || '[]');
+                msgs.push({ type, data, ts: Date.now(), session: currentSessionId });
+                // Keep last 500 messages to avoid localStorage bloat
+                if (msgs.length > 500) msgs.splice(0, msgs.length - 500);
+                localStorage.setItem(MSG_KEY, JSON.stringify(msgs));
+            } catch(e) {}
+        }
+
+        function restoreMessages() {
+            try {
+                const msgs = JSON.parse(localStorage.getItem(MSG_KEY) || '[]');
+                const sessionMsgs = msgs.filter(m => m.session === currentSessionId);
+                sessionMsgs.forEach(m => {
+                    if (m.type === 'agent_message') {
+                        const p = getTP(m.data);
+                        if (p && m.data.from && m.data.content) {
+                            const from = m.data.from, to = m.data.to, content = m.data.content, turn = m.data.turn;
+                            if (!['architect','developer'].includes(from)) {
+                                const roleInfo = {researcher:'🔍',tester:'🧪',security:'🛡',devops:'⚙'};
+                                const icon = roleInfo[from] || '🤖';
+                                appendTo(p.commsBody, '<div class="msg"><div class="msg-meta">'+icon+' '+from+' → team &middot; Turn '+turn+'</div><div class="msg-content">'+esc(content)+'</div></div>');
+                            } else {
+                                const arrow = from + ' → ' + to;
+                                const cls = from === 'architect' ? 'from-arch' : 'from-dev';
+                                appendTo(p.commsBody, '<div class="msg '+cls+'"><div class="msg-meta">'+arrow+' &middot; Turn '+turn+'</div><div class="msg-content">'+esc(content)+'</div></div>');
+                                appendTo(from==='architect'?p.archBody:p.devBody, '<div class="msg"><div class="msg-content">'+esc(content)+'</div></div>');
+                            }
+                        }
+                    } else if (m.type === 'answer' && m.data.text) {
+                        const p = getTP(m.data);
+                        appendTo(p ? p.commsBody : document.getElementById('commsBody'),
+                            '<div class="msg from-system"><div class="msg-content">'+esc(m.data.text)+'</div></div>');
+                    } else if (m.type === 'done' && m.data.summary) {
+                        const p = getTP(m.data);
+                        let html = '<div class="msg from-system"><div class="msg-content" style="color:var(--cyan)">✅ '+esc(m.data.summary)+'</div>';
+                        if (m.data.files && m.data.files.length) html += '<div style="font-size:0.75rem;margin-top:4px;color:var(--text-dim)">Files: '+m.data.files.join(', ')+'</div>';
+                        if (m.data.memory_count) html += '<div style="font-size:0.7rem;margin-top:2px;color:#34d399">🧬 '+m.data.memory_count+' memories stored</div>';
+                        html += '</div></div>';
+                        appendTo(p ? p.commsBody : document.getElementById('commsBody'), html);
+                    }
+                });
+            } catch(e) { console.warn('Restore failed:', e); }
+        }
+
         const $ = id => document.getElementById(id);
         const taskForm = $('taskForm'), taskInput = $('taskInput'), btnExecute = $('btnExecute');
         const statusText = $('statusText'), statusDot = $('statusDot');
@@ -1921,6 +1978,7 @@
         socket.on('agent_message', (d) => {
             const p = getTP(d);
             const from = d.from, to = d.to, content = d.content, turn = d.turn;
+            persistMsg('agent_message', d);
             // Specialist agents go to comms panel
             if (!['architect','developer'].includes(from)) {
                 const roleInfo = {researcher:'🔍',tester:'🧪',security:'🛡',devops:'⚙'};
@@ -1962,9 +2020,8 @@
             const p = getTP(d);
             appendTo(p.commsBody, '<div class="msg from-system"><div class="msg-content">'+esc(d.text)+'</div></div>');
             speak(d.text);
+            persistMsg('answer', d);
         });
-
-        // ── Done with memory count ──────────────────
         socket.on('done', (d) => {
             const p = getTP(d);
             let html = '<div class="msg from-system"><div class="msg-content" style="color:var(--cyan)">✅ '+esc(d.summary)+'</div>';
@@ -1974,6 +2031,7 @@
             appendTo(p.commsBody, html);
             speak('Task complete: ' + d.summary);
             updateMemory();
+            persistMsg('done', d);
         });
 
         // ── A2A Agent Network ──────────────────────────
@@ -2522,6 +2580,9 @@
                 $('consciousnessBadge').textContent = '💭 dreaming';
             }
         }).catch(() => {});
+
+        // ── Restore persisted messages on load ──────
+        restoreMessages();
     </script>
 </body>
 </html>

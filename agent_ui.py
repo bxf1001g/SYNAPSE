@@ -7076,7 +7076,7 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
                 capture_output=True, text=True, timeout=60,
             )
 
-    # Ensure git repo exists (Cloud Run containers don't have .git)
+    # Ensure git repo exists and is up-to-date with origin
     git_dir = os.path.join(project_root, ".git")
     if not os.path.isdir(git_dir):
         git("init")
@@ -7087,9 +7087,29 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
                 f"https://x-access-token:{token}@github.com"
             )
         git(f"remote add origin {repo_url}")
-        # Full fetch (not shallow) so branches share history with main
-        git("fetch origin main")
-        git("checkout -b main origin/main")
+
+    # Always sync with remote main before creating evolution branch
+    remote_url = git("remote get-url origin").stdout.strip()
+    if token and "github.com" in remote_url and "@github.com" not in remote_url:
+        push_url = remote_url.replace(
+            "https://github.com",
+            f"https://x-access-token:{token}@github.com"
+        )
+        git(f"remote set-url origin {push_url}")
+    elif token and "github.com" not in remote_url:
+        repo_url = os.environ.get("GITHUB_REPO", "https://github.com/bxf1001g/SYNAPSE")
+        push_url = repo_url.replace(
+            "https://github.com",
+            f"https://x-access-token:{token}@github.com"
+        )
+        git(f"remote set-url origin {push_url}")
+
+    fetch_r = git("fetch origin main")
+    if fetch_r.returncode != 0:
+        _mb_log("error", f"Git fetch failed: {fetch_r.stderr[:100]}")
+        return
+    git("checkout main 2>nul || git checkout -b main origin/main")
+    git("reset --hard origin/main")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     branch = f"synapse-evolve-{timestamp}"
@@ -7148,8 +7168,22 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
                     base=repo.default_branch,
                 )
                 pr_url = pr.html_url
+                # Auto-merge immediately (sandbox already approved)
+                try:
+                    pr.merge(
+                        commit_title=f"evolve: {improvement[:60]}",
+                        commit_message=(
+                            f"Auto-merged by SYNAPSE evolution pipeline.\n"
+                            f"Eval score: {eval_score}"
+                        ),
+                        merge_method="squash",
+                    )
+                    _mb_log("system", f"Auto-merged PR #{pr.number}")
+                except Exception as merge_err:
+                    _mb_log("error", f"Auto-merge failed: {merge_err}")
         except Exception as e:
             pr_url = f"(PR failed: {e})"
+            _mb_log("error", f"PR creation failed: {e}")
 
     evolution_entry = {
         "time": datetime.now().isoformat(),
