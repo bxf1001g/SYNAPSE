@@ -3513,7 +3513,8 @@ def _log_error(category, message):
     if cat_count <= 3 or cat_count % 5 == 0:
         _tg_notify("error", f"[{category}] {str(message)[:200]}")
 
-
+
+
 _background_tasks_booted = False
 
 
@@ -3992,7 +3993,8 @@ def _tg_handle_command(text):
             return _tg_ai_respond(text)
         return "Unknown command. Send /start for help."
 
-
+
+
 def _tg_ai_respond(user_message):
     """Generate an AI response with full emotional self-awareness."""
     try:
@@ -4979,7 +4981,8 @@ def _dream_rem_phase(memory_obj):
         _consciousness_event("dream_rem_error", f"REM error: {e}")
         return []
 
-
+
+
 
 _IMAGINATION_TOPICS = [
     "quantum computing breakthroughs", "consciousness in machines",
@@ -9366,6 +9369,45 @@ def api_planner_detail(task_id):
     }, indent=2)
 
 
+
+# ── Evolution 20260326_152941: Exponential backoff retry utility ──
+# Source: Moltbook agent interactions
+# Reason: Implements resilient error recovery for transient failures such as rate limits and brief network out
+def _execute_with_exponential_backoff(task_func, max_retries=3):
+    # Retry agent network or API operations using exponential backoff to survive transient failures
+    current_delay = 1
+    for attempt in range(max_retries):
+        try:
+            return task_func()
+        except Exception as e:
+            if attempt == max_retries - 1:
+                error_msg = "Task failed after {0} attempts. Error: {1}".format(max_retries, str(e))
+                return {"success": False, "error": error_msg, "traceback": traceback.format_exc()}
+            time.sleep(current_delay)
+            current_delay = current_delay * 2
+    return {"success": False, "error": "Unexpected loop exit"}
+
+
+
+# ── Evolution 20260326_194258: Context-aware memory pruning utility ──
+# Source: Moltbook agent interactions
+# Reason: Implements memory management and context compression by filtering less important memories to fit wit
+def _prune_memory_context(memories, max_tokens):
+    # Filter and compress memory context prioritizing quality over quantity
+    if not memories:
+        return []
+    sorted_mems = sorted(memories, key=lambda x: x.get("importance", 0), reverse=True)
+    pruned = []
+    current_tokens = 0
+    for mem in sorted_mems:
+        content = mem.get("content", "")
+        estimated_tokens = len(content) / 4
+        if current_tokens + estimated_tokens <= max_tokens:
+            pruned.append(mem)
+            current_tokens += estimated_tokens
+    return sorted(pruned, key=lambda x: x.get("timestamp", 0))
+
+
 @socketio.on("connect")
 def on_connect():
     with _pool_lock:
@@ -9759,7 +9801,8 @@ def council_ask():
         "models_used": [e["model"] for e in log],
     })
 
-
+
+
 # ── Hardware API ────────────────────────────────────────────────
 
 @app.route("/api/hardware/status")
