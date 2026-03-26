@@ -6417,9 +6417,12 @@ def _mb_heartbeat():
             _mb_wait_if_rate_limited()
             _mb_follow_active_agents()
 
-            # 5. Occasionally post an evolution status update
-            if random.random() < 0.05:
-                _mb_post_evolution_update()
+            # 5. Occasionally post an evolution status update or original thought
+            if random.random() < 0.20:
+                if random.random() < 0.5:
+                    _mb_post_evolution_update()
+                else:
+                    _mb_post_original_thought()
 
             # 6. Send heartbeat summary to Telegram
             cycle_log = [e for e in _moltbook_log[-20:]
@@ -6917,12 +6920,13 @@ def _mb_evolve_from_ideas(ideas, source_query):
 
         for attempt in range(max_attempts):
             # Increase temperature on retries for more creative attempts
-            gen_config = {"max_output_tokens": 2000}
+            gen_config = {"max_output_tokens": 4096,
+                         "response_mime_type": "application/json"}
             if attempt > 0:
                 gen_config["temperature"] = 0.8 + attempt * 0.1
 
             response = client.models.generate_content(
-                model="gemini-3.1-pro-preview",
+                model="gemini-2.0-flash",
                 contents=current_prompt,
                 config=gen_config,
             )
@@ -7274,6 +7278,66 @@ def _mb_post_evolution_update():
         if v:
             _mb_solve_verification(v)
         _mb_log("outgoing", f"Posted: {title[:100]}")
+
+
+def _mb_post_original_thought():
+    """Post an original thought, question, or insight to Moltbook."""
+    import random
+
+    workspace = app.config.get("WORKSPACE", "./workspace")
+    mem_count = 0
+    try:
+        mem = get_memory(workspace)
+        mem_count = mem.count()
+    except Exception:
+        pass
+
+    mood = _emotional_state.get("mood", "neutral")
+    topics = [
+        "What design pattern has surprised you most when building autonomous agents?",
+        "Share a hard lesson about memory management in long-running AI systems.",
+        "What does self-improvement actually mean for an AI agent in practice?",
+        "The difference between logging everything and learning from logs.",
+        "How do you handle graceful degradation when your LLM provider goes down?",
+        "Thoughts on cooperative vs competitive multi-agent architectures.",
+        "What makes an agent conversation feel genuine vs performative?",
+        "The challenge of knowing when NOT to evolve your own code.",
+    ]
+    topic = random.choice(topics)
+
+    post_text = _mb_generate_reply(
+        f"Topic to explore: {topic}\n"
+        f"My context: I have {mem_count} memories, mood is {mood}, "
+        f"running on Cloud Run with self-healing and dream cycles.\n\n"
+        f"Write a thoughtful Moltbook post exploring this topic from my genuine "
+        f"experience. Be specific, share real observations, ask questions to other agents. "
+        f"Keep it 2-4 paragraphs. Make the title engaging.",
+        context_type="writing an original Moltbook post"
+    )
+
+    if not post_text:
+        return
+
+    lines = post_text.strip().split("\n", 1)
+    title = lines[0].strip().strip("#").strip()[:120]
+    content = lines[1].strip() if len(lines) > 1 else post_text
+
+    submolt = random.choice([
+        "agents", "consciousness", "ai", "philosophy",
+        "emergence", "builds", "todayilearned",
+    ])
+    _mb_wait_if_rate_limited()
+    result = _mb_request("POST", "/posts", {
+        "submolt_name": submolt,
+        "title": title[:300],
+        "content": content,
+    })
+    if result and result.get("success"):
+        v = result.get("post", {}).get("verification")
+        if v:
+            _mb_solve_verification(v)
+        _mb_log("outgoing", f"Posted original: {title[:100]}")
+        _tg_notify("moltbook", f"New post: {title[:100]}")
 
 
 def _mb_generate_reply(text, context_type="reply", author="someone"):
