@@ -7104,6 +7104,15 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
         )
         git(f"remote set-url origin {push_url}")
 
+    # Save the evolved file content BEFORE git reset (sandbox already wrote it)
+    agent_file = os.path.join(project_root, "agent_ui.py")
+    try:
+        with open(agent_file, "r", encoding="utf-8") as f:
+            evolved_content = f.read()
+    except Exception as e:
+        _mb_log("error", f"Cannot read evolved file: {e}")
+        return
+
     fetch_r = git("fetch origin main")
     if fetch_r.returncode != 0:
         _mb_log("error", f"Git fetch failed: {fetch_r.stderr[:100]}")
@@ -7117,6 +7126,16 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
     git("config user.email synapse-evolution@noreply.github.com")
     git("config user.name SYNAPSE-Evolution")
     git(f"checkout -b {branch}")
+
+    # Re-apply the evolved code (git reset wiped it)
+    try:
+        with open(agent_file, "w", encoding="utf-8") as f:
+            f.write(evolved_content)
+    except Exception as e:
+        _mb_log("error", f"Cannot write evolved file: {e}")
+        git("checkout main 2>nul || git checkout master")
+        return
+
     git("add agent_ui.py")
 
     eval_score = details.get("eval_scores", {}).get("overall_score", 0)
@@ -7143,14 +7162,17 @@ def _mb_apply_evolution(project_root, code, improvement, reason, config):
         _mb_log("error", f"Git push failed: {r.stderr[:100]}")
         return
 
-    # Create PR
+    # Create PR and auto-merge
     pr_url = ""
     if token and _github_available:
         try:
             g = _Github(token)
-            m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", remote_url)
+            remote_url_clean = remote_url.split("@")[-1] if "@" in remote_url else remote_url
+            m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", remote_url_clean)
             if m:
-                repo = g.get_repo(m.group(1))
+                repo_name = m.group(1)
+                print(f"[EVOLUTION] Creating PR for {repo_name} branch {branch}", flush=True)
+                repo = g.get_repo(repo_name)
                 pr = repo.create_pull(
                     title=f"🧬 SYNAPSE Evolution: {improvement[:80]}",
                     body=(
