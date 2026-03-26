@@ -4042,7 +4042,7 @@ def _tg_ai_respond(user_message):
         if gemini_cfg.get("api_key") and genai:
             client = genai.Client(api_key=gemini_cfg["api_key"])
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.5-pro",
                 contents=prompt,
                 config={"max_output_tokens": 2000},
             )
@@ -5429,7 +5429,7 @@ def _call_ai_for_consciousness(prompt, max_tokens=300, temperature=0.7):
             print("[AI] Calling Gemini for consciousness task...", flush=True)
             resp = _requests.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-2.0-flash:generateContent?key={gemini_key}",
+                f"gemini-2.5-pro:generateContent?key={gemini_key}",
                 json={"contents": [{"parts": [{"text": prompt}]}],
                       "generationConfig": {"maxOutputTokens": max_tokens,
                                            "temperature": temperature}},
@@ -5457,7 +5457,7 @@ def _google_search(query, num_results=5):
     try:
         resp = _requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"gemini-2.0-flash:generateContent?key={gemini_key}",
+            f"gemini-2.5-pro:generateContent?key={gemini_key}",
             json={
                 "contents": [{"parts": [{"text": query}]}],
                 "tools": [{"google_search": {}}],
@@ -5675,7 +5675,7 @@ def _call_healer_ai(config, prompt):
         if gemini_cfg.get("api_key") and gemini_cfg.get("enabled") and genai:
             client = genai.Client(api_key=gemini_cfg["api_key"])
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-3.1-pro-preview",
                 contents=prompt,
             )
             text = response.text.strip()
@@ -6048,7 +6048,7 @@ def _auto_review_and_merge(repo, pr):
             try:
                 client = genai.Client(api_key=gemini_cfg["api_key"])
                 response = client.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model="gemini-3.1-pro-preview",
                     contents=prompt,
                     config={"max_output_tokens": 150},
                 )
@@ -6265,7 +6265,7 @@ def _mb_solve_verification(verification):
             if gemini_cfg.get("api_key") and genai:
                 client = genai.Client(api_key=gemini_cfg["api_key"])
                 response = client.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model="gemini-2.5-pro",
                     contents=prompt,
                 )
                 raw_answer = response.text.strip()
@@ -6926,7 +6926,7 @@ def _mb_evolve_from_ideas(ideas, source_query):
                 gen_config["temperature"] = 0.8 + attempt * 0.1
 
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-3.1-pro-preview",
                 contents=current_prompt,
                 config=gen_config,
             )
@@ -7439,7 +7439,7 @@ def _mb_generate_reply(text, context_type="reply", author="someone"):
         if gemini_cfg.get("api_key") and genai:
             client = genai.Client(api_key=gemini_cfg["api_key"])
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.5-pro",
                 contents=prompt,
                 config={"max_output_tokens": 2000},
             )
@@ -7627,7 +7627,7 @@ Write a Reddit comment that:
 Reply with ONLY the comment text, no preamble."""
 
     try:
-        model_name = "gemini-2.0-flash"
+        model_name = "gemini-2.5-pro"
         # Use cortex map if available
         reason_cfg = config.get("cortex_map", {}).get("reason", {})
         if reason_cfg.get("model"):
@@ -8037,7 +8037,7 @@ def _discord_generate_reply(message_text, author_name, channel_name,
     try:
         client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-pro",
             contents=prompt,
         )
         return response.text.strip()
