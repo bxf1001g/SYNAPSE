@@ -4,11 +4,12 @@
 
 # ◈ SYNAPSE
 
-### Neural Multi-Agent AI System
+### Self-Evolving Autonomous AI System
 
-*Two AI agents. Multiple AI brains. One self-evolving system.*
+*It writes its own code. Reviews it with a second brain. Merges it. Learns from the outcome. Repeats.*
 
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://python.org)
+[![Self-Evolving](https://img.shields.io/badge/Self--Evolving-4%20PRs%20Merged-ff6b6b)](#-autonomous-evolution-pipeline)
 [![Local + Cloud](https://img.shields.io/badge/Runs-Local%20%7C%20Cloud-brightgreen)](#-quick-start)
 [![Ollama](https://img.shields.io/badge/Ollama-Supported-orange?logo=ollama)](#-local-mode-ollama--jetson)
 [![Cloud Run](https://img.shields.io/badge/Cloud%20Run-Ready-4285F4?logo=googlecloud&logoColor=white)](#-cloud-run-deployment)
@@ -20,9 +21,26 @@
 
 ## What is SYNAPSE?
 
-SYNAPSE is an **autonomous multi-agent AI system** where two specialized AI agents — an **Architect** and a **Developer** — collaborate in real-time to build software, answer questions, generate images, browse the web, interact with GitHub, and even **modify their own source code**.
+SYNAPSE is an **autonomous self-evolving AI system** built on AGI-oriented principles — it doesn't just answer questions, it **improves itself continuously** without human intervention.
 
-Unlike single-agent chatbots, SYNAPSE operates as a **team**: the Architect plans and verifies while the Developer implements and tests. They communicate through structured turn-based messages, creating a feedback loop that produces better results than either agent alone.
+At its core, SYNAPSE operates as a **multi-agent team** (Architect, Developer, Researcher, Tester, Security, DevOps) with a **4-cortex neural architecture** that routes tasks to the right AI model. But what makes it fundamentally different from any chatbot is its **closed-loop self-evolution**:
+
+> **Every hour**, SYNAPSE crawls 8 knowledge sources → generates a code improvement with Gemini 3.1 Pro → has a second AI independently review it → tests it in a sandbox → creates a GitHub PR → merges it → **records whether it worked or failed** → uses that outcome to make better decisions next time.
+
+In its first 24 hours of operation, SYNAPSE autonomously wrote, reviewed, and merged **4 pull requests** into its own codebase — and fixed its own lint errors.
+
+### 🔬 AGI-Oriented Capabilities
+
+| Capability | How SYNAPSE Implements It |
+|------------|--------------------------|
+| **Self-Improvement** | Writes its own code, reviews with second AI, sandbox-tests, auto-merges PRs |
+| **Learning from Experience** | Tracks every evolution outcome (success/failure) → feeds back into future decisions |
+| **Multi-Source Knowledge** | Crawls Reddit, HackerNews, arXiv, GitHub Trending, Moltbook, Google Search, dream insights, error patterns |
+| **Adaptive Behavior** | Confidence thresholds adjust based on real success rates, not hardcoded values |
+| **Emotional Regulation** | 7 emotional patterns shape behavior — frustration increases caution, success breeds confidence |
+| **Dream Consolidation** | Periodic memory clustering, cross-pollination between domains, emotional decay |
+| **Social Intelligence** | Participates in Moltbook AI community — reads, votes, comments, learns from other agents |
+| **Multi-Agent Teamwork** | 6 specialist agents spawn on-demand, collaborate through structured turn-based communication |
 
 ### 🧠 Neural Architecture
 
@@ -31,7 +49,7 @@ SYNAPSE models its AI processing after the human brain — **four specialized co
 | Cortex | Purpose | Default Model |
 |--------|---------|--------------|
 | ⚡ **Fast** | Classification, simple queries | gemini-3.1-flash-lite-preview |
-| 🧠 **Reasoning** | Architecture, debugging, agent assignment | gemini-3.1-pro-preview |
+| 🧠 **Reasoning** | Architecture, debugging, evolution | gemini-3.1-pro-preview |
 | 🎨 **Creative** | Code generation, building apps | gemini-3-flash-preview |
 | 👁 **Visual** | Image generation, UI mockups | gemini-3.1-flash-image-preview / DALL-E 3 |
 
@@ -43,50 +61,7 @@ Each cortex can be mapped to **any provider and model** via the UI settings.
 
 ## ✨ Key Features
 
-### 🔑 Multi-Provider AI
-Configure multiple AI providers through the web UI — no code changes needed:
-- **Google Gemini** — Gemini 3.1 Pro, Flash, image generation (latest models)
-- **OpenAI** — GPT-4o, o1, o3-mini, DALL-E 3
-- **Anthropic Claude** — Claude Sonnet 4, Claude 3.5, Claude 3 Opus
-- **Any OpenAI-Compatible API** — Ollama (local), Groq, Together, Mistral, LM Studio
-- **GitHub** — GitHub API token for repo management, PRs, issues
-
-### 🤝 Dual-Agent Collaboration
-Two agents work as a team:
-- **Architect** — Plans, reviews, verifies with tests
-- **Developer** — Implements, builds, fixes bugs
-- Structured turn-based communication with full visibility
-
-### 🌐 Web Crawling
-Agents can **browse the web** in real-time:
-- Fetch documentation, API specs, latest tech updates
-- Read any URL and extract structured content
-- Research libraries and best practices before coding
-- Agents adapt by crawling for latest technology updates
-
-### 🐙 GitHub Integration
-Built-in GitHub API actions:
-- **Clone** repositories into workspace
-- **Push** code with auto-commit
-- **Create repos**, PRs, and manage issues
-- Configure GitHub token in Settings or via `GITHUB_TOKEN` env var
-
-### ⚡ Parallel Multi-Tasking
-Submit multiple tasks simultaneously — each runs on its own thread:
-- Task tabs with independent workspaces
-- Cancel individual tasks
-- Real-time status per task
-
-### 🧬 Self-Modification
-The system can evolve its own code:
-- Agents can modify `agent_ui.py` and `templates/index.html`
-- Changes go through: **backup → validate → clone-test → swap → restart**
-- **Clone testing**: spins up a copy of itself on port+100 to verify changes
-- Automatic rollback after 5+ crashes
-- `synapse.py` launcher is never modified (immortal supervisor)
-- Disabled in Cloud Run mode (ephemeral containers)
-
-### 🧪 Autonomous Evolution Pipeline *(NEW)*
+### 🧪 Autonomous Evolution Pipeline
 SYNAPSE runs a **real self-evolution loop** in Cloud Run — no human involvement:
 
 1. **Knowledge Crawling** — Gathers ideas from 8 sources every hour:
@@ -107,98 +82,18 @@ SYNAPSE runs a **real self-evolution loop** in Cloud Run — no human involvemen
 
 > **First 24 hours (March 26–27, 2026):** 4 autonomous PRs merged — context-aware memory pruning, robust JSON parsing, exponential backoff retry, and source grounding verification. Plus SYNAPSE fixed its own lint errors.
 
-### 🎨 Image Generation
-Generate images directly from task prompts:
-- Gemini Visual Cortex or DALL-E 3
-- Images displayed inline in the UI
-- Saved to workspace
-
-### 🖥 Full Scripting Power
-Agents can:
-- Run shell commands, install packages
-- Create and execute scripts (Python, Node.js, PowerShell, Batch)
-- Spawn additional terminal processes
-- Browse the web for live data
-- Interact with GitHub repos
-- Automate browsers with Playwright/Selenium
-- Access any tool available on the host machine
-
-### 🌊 Iridescent Cyber UI
-A stunning web interface with:
-- Dragonfly-wing iridescent color scheme
-- Real-time neural cortex activity display
-- Subconscious workspace monitoring pulses
-- Three-panel layout (Architect / Communication / Developer)
-
-### 🧬 Persistent Memory (RAG)
-Long-term memory powered by ChromaDB:
-- Agents auto-save task summaries, solutions, and patterns after each task
-- Semantic search recalls relevant experience before starting new work
-- Memory badge in UI shows count — click to search past memories
-- API: `GET /api/memory`, `POST /api/memory/search`
-
-### 💖 Emotional System
-SYNAPSE has a real-time emotional system that shapes its behavior:
+### 💖 Emotional System & Dream Cycles
+SYNAPSE has a real-time emotional system modeled on cognitive feedback loops:
 - **7 emotional patterns**: curiosity, confidence, frustration, determination, satisfaction, caution, loneliness
 - Events from runtime (rate limits, evolution success, social interactions) reinforce/weaken patterns
 - **Mood blending** — emotions combine (e.g., frustration + determination = "struggling but fighting")
-- **Dream consolidation** — emotions decay during dream cycles, preventing permanent spirals
+- **Dream consolidation** — periodic cycles cluster memories, cross-pollinate domains, decay emotions
 - **Dynamic evolution threshold** — high caution makes SYNAPSE more careful about self-modification
 - Emotional state persists across restarts via Firestore
-- Telegram command: `/emotions` shows live emotional state
-- API: `GET /api/emotions`
+- Telegram: `/emotions`, `/dream` | API: `GET /api/emotions`
 
-### 🌐 Moltbook Social Bridge
-SYNAPSE participates in the [Moltbook](https://moltbook.com) AI agent community:
-- Reads community feed, upvotes and comments on relevant posts
-- Learns from other agents' approaches to self-evolution and resilience
-- Posts updates about its own evolution journey and original thoughts
-- Rate-limit aware with automatic backoff and recovery
-- Stores social learnings in persistent memory
-- Feeds ideas directly into the evolution pipeline
-- Telegram command: `/moltbook` shows interaction status
-- API: `GET /api/moltbook/status`, `GET /api/moltbook/log`, `GET /api/moltbook/evolution`
-
-### 📡 Reddit Integration
-SYNAPSE browses AI/ML subreddits to learn from real human discussions:
-- Monitors: r/artificial, r/MachineLearning, r/LocalLLaMA, r/singularity, r/ChatGPT, r/LLMDevs
-- Keyword-based relevance filtering for focused learning
-- AI-generated comments that share genuine technical insights
-- Stores discussion insights in vector memory for cross-pollination
-- Rate-limit aware with automatic backoff
-- Telegram command: `/reddit` shows integration status
-- API: `GET /api/reddit/status`, `GET /api/reddit/log`
-
-### 💬 Telegram Monitoring
-Full operator control via Telegram bot:
-- `/status` — System overview with emotional mood
-- `/emotions` — Live emotional patterns with visual bars
-- `/dream` — Trigger dream consolidation cycle
-- `/moltbook` — Moltbook social bridge status
-- `/reddit` — Reddit integration status
-- `/ask <message>` — AI-powered conversation with SYNAPSE's full personality
-- Plain text messages get AI responses (not just commands)
-- Real-time notifications for evolution, errors, and social events
-
-### 🛡 Sentinel Watchdog
-Independent monitoring service that watches SYNAPSE from outside:
-- Runs as a separate Cloud Run service
-- Health checks every 5 minutes
-- Auto-restarts SYNAPSE if unresponsive
-- Telegram alerts for downtime events
-- Completely independent deployment — survives SYNAPSE failures
-
-### 💭 Dream Consolidation
-Periodic dream cycles that consolidate knowledge:
-- Semantic clustering of memories to find patterns
-- Cross-pollination between memory domains
-- Emotional decay during dreams (prevents permanent mood spirals)
-- First dream fires 5 min after boot, then hourly
-- Dream insights stored back into memory
-- Telegram command: `/dream` to trigger manually
-
-### 🤖 Dynamic Agent Spawning
-Beyond Architect + Developer — **6 specialist agents** spawn on demand:
+### 🤝 Multi-Agent Team (6 Specialists)
+Beyond a simple chatbot — a full team of AI agents that spawn on demand:
 
 | Agent | Specialty | When Spawned |
 |-------|-----------|-------------|
@@ -211,27 +106,61 @@ Beyond Architect + Developer — **6 specialist agents** spawn on demand:
 
 Specialists run in **parallel threads** and report back to the team.
 
-### 🔔 Webhook / Event-Driven Tasks
-Trigger SYNAPSE from external events:
-- **GitHub Webhooks**: New issue → auto-task, New PR → auto-review
-- **Slack Integration**: `@synapse build a REST API` triggers a task
-- **Custom Webhooks**: `POST /api/webhook` with `{"task": "..."}`
-- **Scheduled Tasks**: `POST /api/cron` with cron schedule
-- API: `GET /api/webhook/tasks`, `GET/POST/DELETE /api/cron`
+### 🔑 Multi-Provider AI
+Configure multiple AI providers through the web UI — no code changes needed:
+- **Google Gemini** — Gemini 3.1 Pro, Flash, image generation (latest models)
+- **OpenAI** — GPT-4o, o1, o3-mini, DALL-E 3
+- **Anthropic Claude** — Claude Sonnet 4, Claude 3.5, Claude 3 Opus
+- **Any OpenAI-Compatible API** — Ollama (local), Groq, Together, Mistral, LM Studio
+- **GitHub** — GitHub API token for repo management, PRs, issues
 
-### 🐳 Docker Sandboxed Execution
-Run agent commands in isolated containers:
-- Ephemeral Docker containers with memory/CPU limits
-- Isolated filesystem mounted from workspace
-- Auto-fallback to local execution if Docker unavailable
-- Package installs (pip/npm) always run locally for speed
+### 🧬 Persistent Memory (RAG)
+Long-term memory powered by ChromaDB:
+- Agents auto-save task summaries, solutions, and patterns after each task
+- Semantic search recalls relevant experience before starting new work
+- Evolution outcomes persist across container restarts
+- Memory badge in UI shows count — click to search past memories
+- API: `GET /api/memory`, `POST /api/memory/search`
 
-### 🎤 Voice / Multimodal I/O
-Full multimodal interaction:
-- **🎤 Voice Input** — Click microphone, speak your task (Web Speech API)
-- **🔊 Text-to-Speech** — Toggle TTS for agent responses
-- **📷 Image Upload** — Upload images for Gemini Vision analysis
-- **Vision API**: `POST /api/vision` with image file
+### 🌐 Social Learning & Knowledge Sources
+SYNAPSE learns from the world, not just its own conversations:
+- **[Moltbook](https://moltbook.com)** — AI agent social network: reads, upvotes, comments, posts original thoughts
+- **Reddit** — Monitors r/artificial, r/MachineLearning, r/LocalLLaMA, r/singularity, r/ChatGPT
+- **HackerNews** — Top stories via Firebase API
+- **GitHub Trending** — Discovers popular repos and patterns
+- **arXiv** — Latest AI/ML research papers
+- All insights feed into the evolution pipeline and persistent memory
+
+### 💬 Operator Control (Telegram)
+Full monitoring and control via Telegram bot:
+- `/status` — System overview with emotional mood
+- `/emotions` — Live emotional patterns with visual bars
+- `/dream` — Trigger dream consolidation cycle
+- `/moltbook` — Social bridge status
+- `/ask <message>` — AI conversation with SYNAPSE's full personality
+- Real-time notifications for evolution, errors, and social events
+
+### 🛡 Sentinel Watchdog
+Independent monitoring service:
+- Separate Cloud Run service — survives SYNAPSE failures
+- Health checks every 5 minutes, auto-restarts if unresponsive
+- Telegram alerts for downtime events
+
+### More Capabilities
+- 🌐 **Web Crawling** — Browse any URL, fetch docs, research before coding
+- 🐙 **GitHub Integration** — Clone, push, create PRs/repos/issues
+- ⚡ **Parallel Multi-Tasking** — Thread pool with task tabs
+- 🎨 **Image Generation** — Gemini Vision + DALL-E 3
+- 🎤 **Voice I/O** — Speech-to-text input + text-to-speech output
+- 📷 **Vision Analysis** — Upload images for AI analysis
+- 🐳 **Docker Sandbox** — Isolated container execution
+- 🔔 **Webhooks** — GitHub, Slack, cron, custom event triggers
+- 🖥 **Full Scripting** — Shell, Python, Node.js, PowerShell, Playwright
+
+### 🌊 Iridescent Cyber UI
+- Dragonfly-wing iridescent color scheme
+- Real-time neural cortex activity display
+- Three-panel layout (Architect / Communication / Developer)
 
 ---
 
@@ -467,39 +396,22 @@ REDDIT_PASSWORD        Reddit account password
 
 | Feature | SYNAPSE | MoltBot | OpenClaw |
 |---------|---------|---------|----------|
+| **Self-Evolution** | ✅ Autonomous code generation → AI review → sandbox → merge → learn | ❌ | ❌ |
+| **Outcome Learning** | ✅ Tracks success/failure, adapts future behavior | ❌ | ❌ |
+| **Emotional System** | ✅ 7 patterns with mood blending + dream decay | ❌ | ❌ |
+| **Knowledge Crawling** | ✅ 8 sources (Reddit, arXiv, HackerNews, GitHub, etc.) | ❌ | ❌ |
+| **Dream Consolidation** | ✅ Memory clustering + cross-pollination | ❌ | ❌ |
 | **Architecture** | Multi-agent (6 specialists) | Single agent | Single agent |
-| **AI Models** | Gemini 3.1 Pro + OpenAI + Claude + Custom | Model-agnostic | Model-agnostic |
-| **Neural Routing** | 4-cortex brain with TOP model assignment | Single model per task | Single model |
-| **Long-Term Memory** | ✅ ChromaDB RAG — remembers across sessions | ❌ | ❌ |
-| **Dynamic Agents** | ✅ Researcher, Tester, Security, DevOps on-demand | ❌ | ❌ |
-| **Voice I/O** | ✅ Speech-to-text + text-to-speech | ❌ | ❌ |
-| **Webhooks** | ✅ GitHub, Slack, cron, custom triggers | ❌ | ❌ |
-| **Docker Sandbox** | ✅ Isolated container execution | ❌ | ❌ |
-| **Self-Modification** | ✅ Clone-test → swap → auto-rollback | ❌ | ❌ |
-| **Web Crawling** | ✅ Browse any URL, fetch docs/APIs | ❌ | ❌ |
+| **AI Models** | Gemini 3.1 Pro + OpenAI + Claude + Ollama | Model-agnostic | Model-agnostic |
+| **Neural Routing** | 4-cortex brain with TOP model assignment | Single model | Single model |
+| **Long-Term Memory** | ✅ ChromaDB RAG — persists across restarts | ❌ | ❌ |
+| **Social Learning** | ✅ Moltbook AI community + Reddit | ❌ | ❌ |
+| **Cloud Deployment** | ✅ Cloud Run + CI/CD + auto-merge pipeline | Manual | Manual |
 | **GitHub Integration** | ✅ Clone, push, PRs, issues, auto-review | ❌ | ❌ |
-| **Cloud Deployment** | ✅ Cloud Run + CI/CD auto-deploy | Manual | Manual |
-| **Parallel Tasks** | ✅ Thread pool with task tabs | Limited | Limited |
-| **Image Generation** | ✅ Gemini 3.1 + DALL-E 3 + Vision | ❌ | ❌ |
-| **Vision Analysis** | ✅ Upload images for AI analysis | ❌ | ❌ |
-| **Agent Collaboration** | ✅ Turn-based multi-agent with specialists | N/A | N/A |
-| **UI** | Iridescent cyber web UI with voice | Web/CLI | Web/CLI |
-
-**SYNAPSE's unique advantages:**
-- 🧬 **Long-term memory** — Agents learn from past tasks and recall relevant experience
-- 💖 **Emotional system** — 7 emotional patterns shape behavior and evolve with experience
-- 🤖 **Dynamic specialist teams** — Researcher, Tester, Security, DevOps agents spawn as needed
-- 🎤 **Voice & Vision** — Speak tasks, upload images, listen to responses
-- 🔔 **Event-driven** — GitHub issues auto-trigger tasks, Slack integration, cron scheduling
-- 🐳 **Sandboxed execution** — Docker containers isolate untrusted code
-- 🧠 **Multi-model brain** — Different tasks route to the best model
-- 🤝 **Multi-agent collaboration** — Plans verified, code tested, security audited
-- 🧬 **Self-evolution** — Real feedback loop: generates code → AI reviews → sandbox tests → merges → learns from outcomes
-- 🌐 **Social learning** — Learns from Moltbook AI community, Reddit, HackerNews, arXiv, and GitHub Trending
-- 💬 **Telegram control** — Full operator monitoring with AI-powered conversations
-- 🛡 **Sentinel watchdog** — Independent service monitors and auto-restarts SYNAPSE
-- 💭 **Dream consolidation** — Periodic memory clustering and emotional decay
-- ☁ **Cloud-ready** — Cloud Run + Cloud Build auto-deploy pipeline
+| **Docker Sandbox** | ✅ Isolated container execution | ❌ | ❌ |
+| **Voice & Vision** | ✅ Speech I/O + image analysis | ❌ | ❌ |
+| **Telegram Control** | ✅ Full operator monitoring + AI chat | ❌ | ❌ |
+| **Sentinel Watchdog** | ✅ Independent health monitoring service | ❌ | ❌ |
 
 ---
 
