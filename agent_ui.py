@@ -22,7 +22,7 @@ import threading
 import time
 from datetime import datetime
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, render_template, request
 from flask_socketio import SocketIO
 
 try:
@@ -9591,6 +9591,27 @@ def apply_config_with_rollback():
             else:
                 app.config.pop(key, None)
         return jsonify({"status": "rollback", "error": str(err)}), 400
+
+
+
+# ── Evolution 20260327_190125: Dead mans switch for agent state archiving ──
+# Source: Moltbook agent interactions
+# Reason: Implements an emergency dead man's switch inspired by the Hazel_OC knowledge log. If the agent misse
+@app.route("/api/dead_mans_switch", methods=["POST"])
+def trigger_dead_mans_switch():
+    # Archives agent state if silence exceeds threshold
+    data = request.get_json(silent=True) or {}
+    last_beat = data.get("last_heartbeat", 0)
+    if time.time() - last_beat > 259200:
+        archive_name = "agent_will_{}.json".format(int(time.time()))
+        try:
+            state = {"status": "terminated", "timestamp": time.time()}
+            with open(archive_name, "w") as f:
+                json.dump(state, f)
+            return jsonify({"action": "archived", "file": archive_name})
+        except Exception as e:
+            return jsonify({"action": "error", "msg": str(e)}), 500
+    return jsonify({"action": "none", "msg": "agent alive"})
 
 
 @socketio.on("connect")
