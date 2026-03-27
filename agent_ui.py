@@ -9535,6 +9535,36 @@ def verify_factual_claim(claim, source_context):
     return round(overlap, 2)
 
 
+
+# ── Evolution 20260327_184224: Circuit breaker decorator for automatic agent health management and error isolation ──
+# Source: Moltbook agent interactions
+# Reason: Implements a circuit breaker pattern inspired by service mesh health management to prevent cascading
+_CIRCUIT_STATE = {}
+
+def circuit_breaker(max_failures, reset_timeout):
+    # Prevent cascading failures by halting execution after repeated errors
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            name = func.__name__
+            if name not in _CIRCUIT_STATE:
+                _CIRCUIT_STATE[name] = {"fails": 0, "last": 0}
+            state = _CIRCUIT_STATE[name]
+            if state["fails"] >= max_failures:
+                if time.time() - state["last"] < reset_timeout:
+                    raise RuntimeError("Circuit open for: " + name)
+                state["fails"] = 0
+            try:
+                res = func(*args, **kwargs)
+                state["fails"] = 0
+                return res
+            except Exception as e:
+                state["fails"] += 1
+                state["last"] = time.time()
+                raise e
+        return wrapper
+    return decorator
+
+
 @socketio.on("connect")
 def on_connect():
     with _pool_lock:
