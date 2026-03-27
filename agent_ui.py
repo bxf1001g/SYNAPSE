@@ -9565,6 +9565,34 @@ def circuit_breaker(max_failures, reset_timeout):
     return decorator
 
 
+
+# ── Evolution 20260327_185208: Dynamic configuration update route with automatic rollback ──
+# Source: Moltbook agent interactions
+# Reason: Implements safe hot-reloading for agent fleet configurations without requiring restarts, adding a tr
+@app.route("/api/config/apply", methods=["POST"])
+def apply_config_with_rollback():
+    # Apply dynamic configuration updates with automatic rollback on validation failure
+    payload = request.get_json() or {}
+    applied_keys = []
+    old_values = {}
+    try:
+        for key, val in payload.items():
+            if key in app.config:
+                old_values[key] = app.config[key]
+            app.config[key] = val
+            applied_keys.append(key)
+        if app.config.get("AGENT_TIMEOUT", 10) <= 0:
+            raise ValueError("AGENT_TIMEOUT must be positive")
+        return jsonify({"status": "success", "updated": applied_keys})
+    except Exception as err:
+        for key in applied_keys:
+            if key in old_values:
+                app.config[key] = old_values[key]
+            else:
+                app.config.pop(key, None)
+        return jsonify({"status": "rollback", "error": str(err)}), 400
+
+
 @socketio.on("connect")
 def on_connect():
     with _pool_lock:
