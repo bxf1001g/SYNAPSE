@@ -7250,14 +7250,58 @@ def _mb_evolve_from_ideas(ideas, source_query):
                          "Evolution code rejected: dangerous operations")
                 return
 
-            # Check 4: Duplicate
+            # Check 4: Duplicate detection (exact + semantic)
             first_line = code.strip().split("\n")[0]
             if first_line in current_code:
-                _mb_log("system", "Evolution skipped: code already exists")
+                _mb_log("system", "Evolution skipped: code already exists (exact match)")
                 _emotion_reinforce("evolution_rejected_duplicate", first_line[:60])
                 _evo_record_outcome(improvement, code, "duplicate", 0,
                                     reason="code already exists in file")
                 return
+
+            # Check 4b: Semantic duplicate — extract function name and check
+            # if a similar function already exists
+            func_match = re.search(r"def\s+(\w+)\s*\(", code)
+            if func_match:
+                new_func_name = func_match.group(1)
+                # Find all existing function names in the file
+                existing_funcs = re.findall(r"def\s+(\w+)\s*\(", current_code)
+                # Check for keyword overlap in function names
+                new_words = set(re.findall(r"[a-z]+", new_func_name.lower()))
+                for existing in existing_funcs:
+                    existing_words = set(re.findall(r"[a-z]+", existing.lower()))
+                    if not new_words or not existing_words:
+                        continue
+                    overlap = new_words & existing_words
+                    # If 60%+ words overlap, it's likely a semantic duplicate
+                    similarity = len(overlap) / max(len(new_words), 1)
+                    if similarity >= 0.6 and len(overlap) >= 2:
+                        _mb_log("system",
+                                 f"Evolution skipped: semantic duplicate "
+                                 f"({new_func_name} ≈ {existing}, "
+                                 f"overlap: {overlap})")
+                        _evo_record_outcome(
+                            improvement, code, "semantic_duplicate", 0,
+                            reason=f"{new_func_name} too similar to {existing}")
+                        return
+
+            # Check 4c: Topic-level duplicate via improvement description
+            imp_lower = improvement.lower()
+            imp_keywords = set(re.findall(r"[a-z]{4,}", imp_lower))
+            for past in _evolution_outcomes[-15:]:
+                if past.get("status") in ("merged", "duplicate", "semantic_duplicate"):
+                    past_kw = set(re.findall(
+                        r"[a-z]{4,}", past.get("improvement", "").lower()))
+                    if past_kw and imp_keywords:
+                        kw_overlap = imp_keywords & past_kw
+                        if len(kw_overlap) >= 3:
+                            _mb_log("system",
+                                     f"Evolution skipped: topic already covered "
+                                     f"(shared: {', '.join(list(kw_overlap)[:5])})")
+                            _evo_record_outcome(
+                                improvement, code, "topic_duplicate", 0,
+                                reason=f"Topic overlap with: {past.get('improvement', '')[:80]}")
+                            return
 
             # Check 5: AI Code Review (second opinion)
             approved, feedback, quality = _evo_ai_review(

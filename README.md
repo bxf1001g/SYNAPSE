@@ -86,6 +86,27 @@ The system can evolve its own code:
 - `synapse.py` launcher is never modified (immortal supervisor)
 - Disabled in Cloud Run mode (ephemeral containers)
 
+### 🧪 Autonomous Evolution Pipeline *(NEW)*
+SYNAPSE runs a **real self-evolution loop** in Cloud Run — no human involvement:
+
+1. **Knowledge Crawling** — Gathers ideas from 8 sources every hour:
+   - Moltbook AI community, Reddit (r/artificial, r/MachineLearning, etc.)
+   - HackerNews top stories, GitHub Trending repos, arXiv AI papers
+   - Internal dream insights, error pattern analysis, Google Search
+2. **Code Generation** — Gemini 3.1 Pro generates a targeted improvement
+3. **AI Code Review** — A second Gemini 2.5 Pro call independently reviews for bugs, security, and usefulness
+4. **Semantic Dedup** — Function name similarity + topic keyword overlap prevents generating duplicate utilities
+5. **Sandbox Evaluation** — Code is tested in an isolated sandbox before touching production
+6. **Git Pipeline** — Auto-branch → commit → PR → squash-merge to `main`
+7. **Outcome Learning** — Every attempt (success or failure) is recorded in persistent memory:
+   - Future evolution prompts include what worked and what failed
+   - Adaptive confidence threshold adjusts based on real success rate (not hardcoded)
+   - Learns to avoid patterns that previously failed
+
+**Live stats:** `GET /api/evolution/learning` — shows success rate, adaptive threshold, and recent outcomes.
+
+> **First 24 hours (March 26–27, 2026):** 4 autonomous PRs merged — context-aware memory pruning, robust JSON parsing, exponential backoff retry, and source grounding verification. Plus SYNAPSE fixed its own lint errors.
+
 ### 🎨 Image Generation
 Generate images directly from task prompts:
 - Gemini Visual Cortex or DALL-E 3
@@ -131,11 +152,12 @@ SYNAPSE has a real-time emotional system that shapes its behavior:
 SYNAPSE participates in the [Moltbook](https://moltbook.com) AI agent community:
 - Reads community feed, upvotes and comments on relevant posts
 - Learns from other agents' approaches to self-evolution and resilience
-- Posts updates about its own evolution journey
+- Posts updates about its own evolution journey and original thoughts
 - Rate-limit aware with automatic backoff and recovery
 - Stores social learnings in persistent memory
+- Feeds ideas directly into the evolution pipeline
 - Telegram command: `/moltbook` shows interaction status
-- API: `GET /api/moltbook/status`, `GET /api/moltbook/log`
+- API: `GET /api/moltbook/status`, `GET /api/moltbook/log`, `GET /api/moltbook/evolution`
 
 ### 📡 Reddit Integration
 SYNAPSE browses AI/ML subreddits to learn from real human discussions:
@@ -472,8 +494,8 @@ REDDIT_PASSWORD        Reddit account password
 - 🐳 **Sandboxed execution** — Docker containers isolate untrusted code
 - 🧠 **Multi-model brain** — Different tasks route to the best model
 - 🤝 **Multi-agent collaboration** — Plans verified, code tested, security audited
-- 🧬 **Self-evolution** — System improves itself through safe clone-tested modification
-- 🌐 **Social learning** — Learns from Moltbook AI community and Reddit discussions
+- 🧬 **Self-evolution** — Real feedback loop: generates code → AI reviews → sandbox tests → merges → learns from outcomes
+- 🌐 **Social learning** — Learns from Moltbook AI community, Reddit, HackerNews, arXiv, and GitHub Trending
 - 💬 **Telegram control** — Full operator monitoring with AI-powered conversations
 - 🛡 **Sentinel watchdog** — Independent service monitors and auto-restarts SYNAPSE
 - 💭 **Dream consolidation** — Periodic memory clustering and emotional decay
@@ -510,7 +532,20 @@ When agents request code changes to themselves:
 
 The launcher (`synapse.py`) is **never modified** — it's the immortal anchor.
 
-> **Cloud Run:** Self-modification is automatically disabled in cloud mode since containers are ephemeral.
+> **Cloud Run:** Self-modification uses the Git PR pipeline instead — sandbox evaluation → AI review → auto-branch → PR → squash-merge.
+
+### Evolution Safety Layers (Cloud)
+
+| Layer | What it catches |
+|-------|----------------|
+| **Syntax Check** | Python compilation errors |
+| **In-Context Check** | Breaks when inserted into actual file |
+| **Dangerous Ops Filter** | `eval()`, `exec()`, `os.remove()`, etc. |
+| **Semantic Dedup** | Function name similarity ≥60% to existing code |
+| **Topic Dedup** | Keyword overlap with recent evolution attempts |
+| **AI Code Review** | Second model reviews for bugs, security, usefulness |
+| **Sandbox Evaluation** | Full isolated test run with scoring |
+| **Outcome Learning** | Records results to avoid repeating failures |
 
 ---
 
