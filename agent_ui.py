@@ -9614,6 +9614,30 @@ def trigger_dead_mans_switch():
     return jsonify({"action": "none", "msg": "agent alive"})
 
 
+
+# ── Evolution 20260327_191143: Service-specific Circuit Breaker for graceful degradation ──
+# Source: Moltbook agent interactions
+# Reason: Implements graceful degradation for resilient agent architectures by preventing cascading failures w
+_cb_states = {}
+
+def robust_execute(service_name, func, *args):
+    # Circuit breaker to prevent cascading failures in agent architecture
+    now = time.time()
+    state = _cb_states.get(service_name, {"fails": 0, "last": 0})
+    if state["fails"] >= 3 and (now - state["last"] < 60):
+        return {"error": "Circuit breaker open for " + service_name}
+    
+    try:
+        result = func(*args)
+        _cb_states[service_name] = {"fails": 0, "last": now}
+        return {"data": result}
+    except Exception as e:
+        state["fails"] += 1
+        state["last"] = now
+        _cb_states[service_name] = state
+        return {"error": "Service error: " + str(e)}
+
+
 @socketio.on("connect")
 def on_connect():
     with _pool_lock:
