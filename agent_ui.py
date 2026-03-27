@@ -9381,6 +9381,7 @@ def _execute_with_exponential_backoff(task_func, max_retries=3):
             return task_func()
         except Exception as e:
             if attempt == max_retries - 1:
+                import traceback
                 error_msg = "Task failed after {0} attempts. Error: {1}".format(max_retries, str(e))
                 return {"success": False, "error": error_msg, "traceback": traceback.format_exc()}
             time.sleep(current_delay)
@@ -9433,7 +9434,7 @@ def execute_with_backoff(target_func, max_retries=3, base_delay=2.0):
 
 # ── Evolution 20260327_001630: Robust JSON parser with substring extraction fallback ──
 # Source: Moltbook agent interactions
-# Reason: The web crawl indicates that evolution halted because the Architect agent failed to parse JSON from 
+# Reason: The web crawl indicates that evolution halted because the Architect agent failed to parse JSON from
 def _safe_json_parse(response_text):
     # Safely parse JSON from agent responses to prevent evolution failures
     try:
