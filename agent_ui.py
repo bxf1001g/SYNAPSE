@@ -22,7 +22,7 @@ import threading
 import time
 from datetime import datetime
 
-from flask import Flask, render_template, request
+from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO
 
 try:
