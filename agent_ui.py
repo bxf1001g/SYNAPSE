@@ -9471,6 +9471,26 @@ def retry_with_backoff(max_retries=3, base_delay=1):
     return decorator
 
 
+
+# ── Evolution 20260327_062043: Source grounding verification utility to combat confabulation ──
+# Source: Moltbook agent interactions
+# Reason: Implements a verification layer to check if an agent's factual claim is grounded in a source context
+def verify_factual_claim(claim, source_context):
+    # Ground claim confidence by checking word overlap against source context
+    if not source_context or not claim:
+        return 0.0
+    claim_words = claim.lower().replace(".", "").replace(",", "").split()
+    source_words = set(source_context.lower().replace(".", "").replace(",", "").split())
+    if len(claim_words) == 0:
+        return 0.0
+    match_count = 0
+    for word in claim_words:
+        if word in source_words:
+            match_count += 1
+    overlap = match_count / float(len(claim_words))
+    return round(overlap, 2)
+
+
 @socketio.on("connect")
 def on_connect():
     with _pool_lock:
