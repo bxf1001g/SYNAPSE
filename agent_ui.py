@@ -11179,6 +11179,23 @@ def main():
         config["providers"]["gemini"]["enabled"] = True
         save_config(config, base_dir)
 
+    # NVIDIA NIM API key from env
+    nvidia_key = os.environ.get("NVIDIA_API_KEY", "")
+    if nvidia_key:
+        config["providers"]["nvidia"]["api_key"] = nvidia_key
+        config["providers"]["nvidia"]["enabled"] = True
+        if not config["providers"]["nvidia"].get("base_url"):
+            config["providers"]["nvidia"]["base_url"] = "https://integrate.api.nvidia.com/v1"
+        # If no Gemini key, make NVIDIA the primary provider
+        if not config["providers"]["gemini"].get("api_key"):
+            config["cortex_map"] = {
+                "fast": {"provider": "nvidia", "model": "meta/llama-3.1-8b-instruct"},
+                "reason": {"provider": "nvidia", "model": "nvidia/llama-3.1-nemotron-70b-instruct"},
+                "create": {"provider": "nvidia", "model": "meta/llama-3.3-70b-instruct"},
+                "visual": {"provider": "nvidia", "model": "meta/llama-3.3-70b-instruct"},
+            }
+        save_config(config, base_dir)
+
     # GitHub token from env
     gh_token = os.environ.get("GITHUB_TOKEN", "")
     if gh_token:
