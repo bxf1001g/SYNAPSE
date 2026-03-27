@@ -22,7 +22,7 @@ import threading
 import time
 from datetime import datetime
 
-from flask import Flask, render_template, request
+from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO
 
 try:
@@ -7240,7 +7240,41 @@ def _mb_evolve_from_ideas(ideas, source_query):
                 )
                 continue
 
-            # Check 3: Dangerous ops
+            # Check 3: Ruff lint check (catches undefined names, style issues)
+            try:
+                import subprocess as _sp  # noqa: I001
+                import tempfile  # noqa: I001
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".py", delete=False
+                ) as tmp:
+                    tmp.write(current_code.rstrip() + "\n\n" + code + "\n")
+                    tmp_path = tmp.name
+                result = _sp.run(
+                    ["ruff", "check", tmp_path, "--select", "F821,E999"],
+                    capture_output=True, text=True, timeout=15)
+                os.unlink(tmp_path)
+                if result.returncode != 0:
+                    errors = result.stdout.strip().split("\n")
+                    error_lines = [ln for ln in errors if "F821" in ln or "E999" in ln]
+                    if error_lines:
+                        _mb_log("system",
+                                 f"Ruff lint failed: {error_lines[0][:120]}")
+                        _evo_record_outcome(
+                            improvement, code, "lint_error", 0,
+                            reason=f"Ruff: {error_lines[0][:150]}")
+                        current_prompt = (
+                            f"Your code has lint errors (undefined names or syntax):\n"
+                            f"{chr(10).join(error_lines[:3])}\n"
+                            f"Fix the code. Make sure all names used are either "
+                            f"defined in your code or imported from standard/installed "
+                            f"packages. Do NOT use jsonify — use flask.jsonify or "
+                            f"return plain dicts instead.\n\n" + prompt
+                        )
+                        continue
+            except Exception:
+                pass  # ruff not available — skip lint check
+
+            # Check 4: Dangerous ops
             dangerous = [
                 "os.remove", "shutil.rmtree", "eval(", "exec(",
                 "__import__", "subprocess.call",
@@ -7250,7 +7284,7 @@ def _mb_evolve_from_ideas(ideas, source_query):
                          "Evolution code rejected: dangerous operations")
                 return
 
-            # Check 4: Duplicate detection (exact + semantic)
+            # Check 5: Duplicate detection (exact + semantic)
             first_line = code.strip().split("\n")[0]
             if first_line in current_code:
                 _mb_log("system", "Evolution skipped: code already exists (exact match)")
@@ -7259,7 +7293,7 @@ def _mb_evolve_from_ideas(ideas, source_query):
                                     reason="code already exists in file")
                 return
 
-            # Check 4b: Semantic duplicate — extract function name and check
+            # Check 5b: Semantic duplicate — extract function name and check
             # if a similar function already exists
             func_match = re.search(r"def\s+(\w+)\s*\(", code)
             if func_match:
@@ -7285,7 +7319,7 @@ def _mb_evolve_from_ideas(ideas, source_query):
                             reason=f"{new_func_name} too similar to {existing}")
                         return
 
-            # Check 4c: Topic-level duplicate via improvement description
+            # Check 5c: Topic-level duplicate via improvement description
             imp_lower = improvement.lower()
             imp_keywords = set(re.findall(r"[a-z]{4,}", imp_lower))
             for past in _evolution_outcomes[-15:]:
@@ -7303,7 +7337,7 @@ def _mb_evolve_from_ideas(ideas, source_query):
                                 reason=f"Topic overlap with: {past.get('improvement', '')[:80]}")
                             return
 
-            # Check 5: AI Code Review (second opinion)
+            # Check 6: AI Code Review (second opinion)
             approved, feedback, quality = _evo_ai_review(
                 client, code, improvement)
             if not approved:
@@ -9626,7 +9660,7 @@ def robust_execute(service_name, func, *args):
     state = _cb_states.get(service_name, {"fails": 0, "last": 0})
     if state["fails"] >= 3 and (now - state["last"] < 60):
         return {"error": "Circuit breaker open for " + service_name}
-    
+
     try:
         result = func(*args)
         _cb_states[service_name] = {"fails": 0, "last": now}
