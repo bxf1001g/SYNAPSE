@@ -1,0 +1,712 @@
+% SYNAPSE: A Self-Evolving Multi-Agent AI System with Closed-Loop
+% Outcome Learning, Emotional Regulation, and Dream Consolidation
+%
+% Compile: pdflatex paper.tex && bibtex paper && pdflatex paper.tex && pdflatex paper.tex
+
+\documentclass[11pt,a4paper]{article}
+
+% ── Packages ──
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{multirow}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{fancyhdr}
+\usepackage{float}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=green!50!black,
+    urlcolor=blue!60!black,
+}
+
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue!70!black}\bfseries,
+    commentstyle=\color{green!50!black}\itshape,
+    stringstyle=\color{red!60!black},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    frame=single,
+    breaklines=true,
+    captionpos=b,
+}
+
+% ── Title ──
+\title{
+    \textbf{SYNAPSE: A Self-Evolving Multi-Agent AI System with \\
+    Closed-Loop Outcome Learning, Emotional Regulation, \\
+    and Dream Consolidation}
+}
+
+\author{
+    Jemisha Roy\textsuperscript{1} \\
+    \texttt{bxf1001g@github} \\[6pt]
+    \textsuperscript{1}Independent Researcher \\[12pt]
+    \small\textit{Project Repository:} \url{https://github.com/bxf1001g/SYNAPSE}
+}
+
+\date{March 27, 2026}
+
+\begin{document}
+\maketitle
+
+% ══════════════════════════════════════════════════════════════════
+% ABSTRACT
+% ══════════════════════════════════════════════════════════════════
+\begin{abstract}
+We present SYNAPSE, an autonomous self-evolving AI system that continuously improves its own source code through a closed-loop pipeline integrating multi-source knowledge crawling, dual-model code generation and review, sandboxed evaluation, and persistent outcome-based learning. Unlike prior self-improving agents that rely on benchmark-driven optimization or human-in-the-loop feedback, SYNAPSE operates as a deployed production system on Google Cloud Run, autonomously writing, reviewing, testing, and merging code changes into its own repository via GitHub pull requests. The system implements AGI-oriented mechanisms including a 7-pattern emotional regulation system that modulates evolution confidence thresholds, periodic dream consolidation cycles that cluster and cross-pollinate memories across domains, and social learning through participation in the Moltbook AI agent community. A multi-agent architecture with six specialist agents (Architect, Developer, Researcher, Tester, Security, DevOps) routes tasks through a four-cortex neural model inspired by brain functional specialization. In its first 24 hours of autonomous operation, SYNAPSE generated, reviewed, and merged four pull requests into its own codebase---including context-aware memory pruning, robust JSON parsing, exponential backoff retry mechanisms, and a source grounding verification utility to combat confabulation---while also self-correcting its own lint errors. We detail the system architecture (9,777 lines of Python, 57 API endpoints, 152 functions), the eight-layer evolution safety pipeline, adaptive confidence thresholds based on real outcome data, and a semantic deduplication system that prevents the generation of functionally redundant code. The system demonstrates that meaningful autonomous self-evolution is achievable in production environments with appropriate safety guardrails.
+\end{abstract}
+
+\noindent\textbf{Keywords:} self-evolving AI, autonomous agents, multi-agent systems, self-improving code, emotional AI, dream consolidation, outcome-based learning, AGI
+
+% ══════════════════════════════════════════════════════════════════
+\section{Introduction}
+\label{sec:introduction}
+% ══════════════════════════════════════════════════════════════════
+
+The pursuit of artificial general intelligence (AGI) has historically focused on scaling model parameters and training data. However, a complementary and arguably more fundamental capability for AGI is \textit{self-improvement}---the ability of a system to autonomously identify its own weaknesses, generate improvements, validate them, and learn from the outcomes of those improvements \cite{schmidhuber2003godel, legg2007universal}.
+
+Recent work on self-improving coding agents \cite{sica2025, selfimproving2025openreview} has demonstrated that large language models (LLMs) can edit their own codebases to improve performance on benchmarks. However, these systems typically operate in controlled evaluation environments, optimize for specific metrics (e.g., SWE-Bench pass rates), and require human oversight for deployment. The gap between ``improving on a benchmark'' and ``genuinely evolving in production'' remains significant.
+
+We present SYNAPSE, a system designed to bridge this gap. SYNAPSE is not a research prototype---it is a \textbf{deployed production system} running continuously on Google Cloud Run that autonomously:
+
+\begin{enumerate}[noitemsep]
+    \item Crawls eight knowledge sources (Reddit, HackerNews, arXiv, GitHub Trending, Moltbook, Google Search, dream insights, error patterns) to identify improvement opportunities.
+    \item Generates targeted code improvements using Gemini 3.1 Pro.
+    \item Independently reviews generated code with a second model (Gemini 2.5 Pro) to catch bugs, security issues, and low-quality changes.
+    \item Tests code in an isolated sandbox with scoring.
+    \item Creates GitHub pull requests and auto-merges approved changes.
+    \item Records every outcome (success, failure, rejection reason) in persistent vector memory.
+    \item Feeds outcome history back into future evolution prompts, creating a genuine closed-loop learning system.
+\end{enumerate}
+
+Beyond self-evolution, SYNAPSE implements several AGI-oriented mechanisms that, to our knowledge, have not been combined in a single deployed system:
+
+\begin{itemize}[noitemsep]
+    \item \textbf{Emotional regulation}: Seven emotional patterns (curiosity, confidence, frustration, determination, satisfaction, caution, loneliness) modulated by 18 event types, with mood blending and dynamic threshold adjustment.
+    \item \textbf{Dream consolidation}: Periodic cycles that cluster memories via semantic similarity, cross-pollinate insights across domains, and decay emotional extremes.
+    \item \textbf{Social intelligence}: Active participation in the Moltbook AI agent community, learning from other agents' approaches.
+    \item \textbf{Multi-agent teamwork}: Six specialist agents with a four-cortex neural routing architecture.
+\end{itemize}
+
+This paper makes the following contributions:
+
+\begin{enumerate}[noitemsep]
+    \item A complete architecture for production self-evolution with an eight-layer safety pipeline (\Cref{sec:evolution}).
+    \item A closed-loop outcome learning system with adaptive confidence thresholds (\Cref{sec:learning}).
+    \item An emotional regulation framework that modulates system behavior (\Cref{sec:emotions}).
+    \item A dream consolidation mechanism for memory management (\Cref{sec:dreams}).
+    \item Empirical results from 24 hours of autonomous operation (\Cref{sec:results}).
+    \item Honest assessment of limitations and the boundary between genuine learning and ``evolution theater'' (\Cref{sec:discussion}).
+\end{enumerate}
+
+% ══════════════════════════════════════════════════════════════════
+\section{Related Work}
+\label{sec:related}
+% ══════════════════════════════════════════════════════════════════
+
+\subsection{Self-Improving AI Systems}
+
+The concept of self-improving AI dates to G\"{o}del machines \cite{schmidhuber2003godel}, which proposed systems that could prove the utility of self-modifications before applying them. Modern instantiations leverage LLMs as the improvement engine. The Self-Improving Coding Agent (SICA) \cite{sica2025} achieved 17--53\% performance improvements on coding benchmarks through iterative self-editing. However, SICA operates in evaluation mode, not as a continuously deployed system.
+
+The comprehensive survey by Fang et al. \cite{fang2025survey} establishes a taxonomy of self-evolving AI agents, distinguishing between \textit{parameter-level} adaptation (fine-tuning), \textit{prompt-level} adaptation (in-context learning), and \textit{code-level} adaptation (modifying the agent's own implementation). SYNAPSE operates primarily at the code level, with prompt-level adaptation through outcome-informed prompt construction.
+
+\subsection{Multi-Agent Architectures}
+
+Multi-agent systems for software engineering have seen significant progress. AutoGen \cite{wu2023autogen} and MetaGPT \cite{hong2023metagpt} demonstrate that teams of specialized LLM agents outperform single agents on complex tasks. SYNAPSE extends this paradigm by adding \textit{self-evolution} to the multi-agent framework---the agents can improve the system they operate within.
+
+\subsection{Emotional and Cognitive Architectures}
+
+Affective computing has explored emotional models for AI \cite{picard2000affective}, but primarily for human-facing applications (empathetic chatbots, sentiment analysis). SYNAPSE uses emotions \textit{internally} as a behavioral regulation mechanism---frustration increases caution thresholds, success breeds confidence---similar to how biological emotions regulate decision-making \cite{damasio1994descartes}.
+
+The concept of ``machine dreaming'' has been explored in the context of generative replay for continual learning \cite{shin2017continual}. SYNAPSE's dream consolidation serves a similar function but operates at the semantic memory level rather than the gradient level.
+
+\subsection{Autonomous Code Generation}
+
+The ``Self-Programming AI'' work \cite{selfprogramming2025} demonstrates agents using AST patching and static analysis for autonomous refactoring. The MIT study on autonomous software engineering \cite{mit2025challenges} highlights the gap between code generation and full software engineering. SYNAPSE addresses this by integrating code generation with review, testing, version control, and deployment in a single pipeline.
+
+% ══════════════════════════════════════════════════════════════════
+\section{System Architecture}
+\label{sec:architecture}
+% ══════════════════════════════════════════════════════════════════
+
+SYNAPSE is implemented as a monolithic Python application (9,777 lines) serving a single-page web application (2,440 lines). It exposes 57 REST/WebSocket API endpoints and defines 152 functions. The system runs on Google Cloud Run with gunicorn and gthread workers.
+
+\subsection{Neural Cortex Routing}
+
+Inspired by the functional specialization of the human brain, SYNAPSE routes tasks through four cortices (\Cref{tab:cortices}). The routing decision itself is made by the most capable model (Gemini 3.1 Pro), ensuring that the initial classification---which determines the quality of all downstream processing---receives maximum reasoning power.
+
+\begin{table}[H]
+\centering
+\caption{Neural cortex architecture with default model assignments.}
+\label{tab:cortices}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Cortex} & \textbf{Function} & \textbf{Default Model} & \textbf{Tokens} \\
+\midrule
+Fast      & Classification, routing    & gemini-3.1-flash-lite  & 1K \\
+Reasoning & Planning, debugging        & gemini-3.1-pro-preview & 8K \\
+Creative  & Code generation, building  & gemini-3-flash-preview & 8K \\
+Visual    & Image gen, UI mockups      & gemini-3.1-flash-image & 4K \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Multi-Agent Team}
+
+SYNAPSE operates six specialist agents (\Cref{tab:agents}). The Architect and Developer are always active; specialists spawn on demand based on keyword detection in the task prompt. Agents communicate through structured turn-based messages visible in the three-panel web UI.
+
+\begin{table}[H]
+\centering
+\caption{Agent specializations and spawn triggers.}
+\label{tab:agents}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Agent} & \textbf{Specialty} & \textbf{Trigger Keywords} \\
+\midrule
+Architect  & Planning, review, coordination & Always active \\
+Developer  & Implementation, building, testing & Always active \\
+Researcher & Web research, documentation & ``research'', ``investigate'' \\
+Tester     & Unit tests, QA, validation & ``test'', ``QA'', ``coverage'' \\
+Security   & Vulnerability audits, OWASP & ``security'', ``vulnerability'' \\
+DevOps     & Docker, CI/CD, infrastructure & ``docker'', ``deploy'' \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Persistent Memory (RAG)}
+
+Long-term memory is implemented using ChromaDB, an embedded vector database. Task summaries, evolution outcomes, dream insights, and social learnings are stored as embeddings and retrieved via semantic search before new tasks. This gives SYNAPSE the ability to recall relevant past experience---a critical component for genuine learning.
+
+\subsection{Infrastructure}
+
+\begin{itemize}[noitemsep]
+    \item \textbf{Deployment}: Google Cloud Run (1 vCPU, 1GB RAM, min-instances=1)
+    \item \textbf{CI/CD}: Cloud Build auto-deploy on push to \texttt{main}
+    \item \textbf{Monitoring}: Sentinel watchdog (separate service), Telegram bot notifications
+    \item \textbf{State}: Google Firestore for emotional state, ChromaDB for vector memory
+    \item \textbf{Dependencies}: 16 Python packages + 3 optional AI provider SDKs
+    \item \textbf{Tests}: 75 unit tests across 5 test files
+\end{itemize}
+
+% ══════════════════════════════════════════════════════════════════
+\section{Self-Evolution Pipeline}
+\label{sec:evolution}
+% ══════════════════════════════════════════════════════════════════
+
+The evolution pipeline is SYNAPSE's core contribution. It runs autonomously on a one-hour cycle and consists of seven stages with eight safety layers.
+
+\subsection{Stage 1: Multi-Source Knowledge Crawling}
+
+SYNAPSE gathers improvement ideas from eight diverse sources:
+
+\begin{enumerate}[noitemsep]
+    \item \textbf{Moltbook} --- AI agent social network: reads feed, learns from other agents' posts about resilience, error handling, and architecture patterns.
+    \item \textbf{Reddit} --- Public JSON API (no authentication required): monitors r/artificial, r/MachineLearning, r/LocalLLaMA, r/singularity, r/ChatGPT, r/LLMDevs.
+    \item \textbf{HackerNews} --- Firebase API: top stories filtered for AI/ML relevance.
+    \item \textbf{GitHub Trending} --- HTML scraping with BeautifulSoup: discovers popular repositories and emerging patterns.
+    \item \textbf{arXiv} --- XML API with search queries for AI agent architectures: extracts paper titles, authors, and abstracts.
+    \item \textbf{Dream insights} --- Internal semantic search for patterns discovered during dream consolidation cycles.
+    \item \textbf{Error patterns} --- Frequency analysis of the system's own error log, surfacing recurring failures.
+    \item \textbf{Google Search} --- Gemini grounding API for targeted queries.
+\end{enumerate}
+
+The top 5 ideas (by relevance) are passed to the code generation stage.
+
+\subsection{Stage 2: Code Generation}
+
+A structured prompt is sent to Gemini 3.1 Pro with:
+\begin{itemize}[noitemsep]
+    \item Current system capabilities
+    \item Knowledge ideas from crawling
+    \item \textbf{Learning context} from past evolution outcomes (what worked, what failed)
+    \item Recent topics list (to avoid repetition)
+    \item Strict code constraints (double quotes only, no f-strings, no imports, 5--25 lines)
+\end{itemize}
+
+The response is forced to JSON format via \texttt{response\_mime\_type: "application/json"} with \texttt{max\_output\_tokens: 4096}. The expected schema:
+
+\begin{lstlisting}[caption={Evolution response schema.}]
+{
+    "improvement": "brief description",
+    "confidence": 0.0-1.0,
+    "code": "the Python code",
+    "reason": "why this helps"
+}
+\end{lstlisting}
+
+\subsection{Stage 3: Eight-Layer Safety Pipeline}
+
+Before any code reaches production, it passes through eight safety layers (\Cref{tab:safety}):
+
+\begin{table}[H]
+\centering
+\caption{Evolution safety layers in execution order.}
+\label{tab:safety}
+\begin{tabular}{@{}clp{7cm}@{}}
+\toprule
+\textbf{\#} & \textbf{Layer} & \textbf{What It Catches} \\
+\midrule
+1 & JSON Validation & Malformed or truncated LLM output \\
+2 & Confidence Threshold & Low-confidence suggestions (adaptive, see \Cref{sec:learning}) \\
+3 & Syntax Check & Python \texttt{compile()} catches syntax errors \\
+4 & In-Context Check & Code inserted into actual file; catches import/scope conflicts \\
+5 & Dangerous Ops Filter & Blocks \texttt{eval()}, \texttt{exec()}, \texttt{os.remove()}, \texttt{subprocess.call()}, \texttt{\_\_import\_\_()} \\
+6 & Semantic Dedup & Function name word overlap $\geq$60\% to existing code; topic keyword overlap $\geq$3 shared keywords with recent attempts \\
+7 & AI Code Review & Second model (Gemini 2.5 Pro) independently reviews for bugs, security, and usefulness \\
+8 & Sandbox Evaluation & Full isolated execution with scoring \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Stage 4: AI Code Review (Dual-Model Verification)}
+
+A critical safety mechanism: after the generating model (Gemini 3.1 Pro) produces code, a \textit{different} model (Gemini 2.5 Pro) reviews it independently. The reviewer checks for:
+
+\begin{enumerate}[noitemsep]
+    \item Bugs or logic errors
+    \item Security issues (injection, data exposure)
+    \item Whether the code actually accomplishes its claimed purpose
+    \item Whether it would break existing functionality
+    \item Whether it provides genuine value vs. trivial boilerplate
+\end{enumerate}
+
+Only if both models agree does the code proceed. This dual-model pattern reduces the risk of a single model's systematic blind spots.
+
+\subsection{Stage 5: Semantic Deduplication}
+\label{sec:dedup}
+
+A naive first-line duplicate check proved insufficient---SYNAPSE generated three variations of ``exponential backoff retry'' in its first 24 hours. We implemented three-tier deduplication:
+
+\begin{enumerate}[noitemsep]
+    \item \textbf{Exact match}: First line of new code checked against existing file.
+    \item \textbf{Function name similarity}: New function name tokenized into words; if $\geq$60\% of words overlap with any existing function and $\geq$2 words match, it is rejected.
+    \item \textbf{Topic keyword overlap}: Improvement description tokenized into 4+ character words; if $\geq$3 keywords match a recent evolution attempt's description, it is rejected.
+\end{enumerate}
+
+\subsection{Stage 6: Git Pipeline}
+
+Approved code follows an automated Git workflow:
+\begin{enumerate}[noitemsep]
+    \item Fetch and reset to \texttt{origin/main} (critical in ephemeral containers)
+    \item Save evolved file content before reset (prevents data loss)
+    \item Create timestamped branch (\texttt{synapse-evolve-YYYYMMDD\_HHMMSS})
+    \item Re-apply evolved code, commit with evaluation score
+    \item Push branch, create pull request via GitHub API
+    \item Auto-merge via squash merge
+\end{enumerate}
+
+A key engineering challenge was that Cloud Run containers include a stale \texttt{.git/} directory from build time. Branches created from this stale state have no common ancestor with \texttt{origin/main}, producing orphan commits that cannot be merged. The fix---always fetching and resetting to \texttt{origin/main} before branching---was itself discovered through debugging seven failed evolution attempts.
+
+% ══════════════════════════════════════════════════════════════════
+\section{Closed-Loop Outcome Learning}
+\label{sec:learning}
+% ══════════════════════════════════════════════════════════════════
+
+The most important distinction between SYNAPSE and prior self-improving systems is \textbf{outcome-based learning}. Every evolution attempt---whether successful or failed---is recorded with structured metadata:
+
+\begin{lstlisting}[caption={Outcome record structure.}]
+{
+    "time": "2026-03-27T00:19:04Z",
+    "improvement": "Robust JSON parser with fallback",
+    "code_snippet": "def _safe_json_parse(response_text)...",
+    "status": "merged",  # or: rejected_sandbox, rejected_review,
+                          #     syntax_error, duplicate, json_fail
+    "score": 0.7,
+    "reason": "PR: https://github.com/.../pull/3",
+    "error": ""
+}
+\end{lstlisting}
+
+\subsection{Persistent Storage}
+
+Outcomes are stored in two locations:
+\begin{itemize}[noitemsep]
+    \item \textbf{In-memory list} (last 50 outcomes) for fast access during evolution.
+    \item \textbf{ChromaDB vector memory} with structured summary text, enabling semantic recall across container restarts.
+\end{itemize}
+
+\subsection{Learning Context Injection}
+
+Before generating new code, SYNAPSE constructs a learning context from past outcomes:
+
+\begin{lstlisting}[caption={Example learning context injected into evolution prompt.}]
+PREVIOUSLY SUCCESSFUL evolutions (do more like these):
+  - Robust JSON parser with fallback [score: 0.7]
+  - Context-aware memory pruning utility [score: 0.7]
+PREVIOUSLY FAILED evolutions (avoid these patterns):
+  - Status endpoint generator [rejected_review]: trivial
+Overall success rate: 4/6 (66%)
+\end{lstlisting}
+
+This context is prepended to the evolution prompt, giving the generating model explicit knowledge of what has worked and what has not.
+
+\subsection{Adaptive Confidence Threshold}
+
+Rather than using a fixed confidence threshold (the original system used a hardcoded 0.5), SYNAPSE adapts based on its actual success rate:
+
+\begin{equation}
+\theta = \begin{cases}
+0.7 & \text{if } r > 0.7 \quad \text{(high success --- be selective)} \\
+0.5 & \text{if } 0.4 < r \leq 0.7 \quad \text{(moderate --- balanced)} \\
+0.3 & \text{if } 0.1 < r \leq 0.4 \quad \text{(low success --- try more)} \\
+0.2 & \text{if } r \leq 0.1 \quad \text{(very low --- accept almost anything)}
+\end{cases}
+\label{eq:threshold}
+\end{equation}
+
+where $r$ is the success rate over the last 10 evolution attempts. This creates a self-regulating feedback loop: a system that is succeeding becomes pickier (avoiding unnecessary changes), while a struggling system becomes more exploratory.
+
+% ══════════════════════════════════════════════════════════════════
+\section{Emotional Regulation System}
+\label{sec:emotions}
+% ══════════════════════════════════════════════════════════════════
+
+SYNAPSE implements a real-time emotional system not for human-facing empathy, but as an \textit{internal behavioral regulation mechanism}. This is inspired by Damasio's somatic marker hypothesis \cite{damasio1994descartes}---emotions as fast heuristics that bias decision-making.
+
+\subsection{Architecture}
+
+The emotional state consists of seven patterns, each with a weight $w_i \in [0, 1]$:
+
+\begin{equation}
+\mathbf{E} = \{(\text{curiosity}, w_1), (\text{confidence}, w_2), (\text{frustration}, w_3), (\text{determination}, w_4), (\text{satisfaction}, w_5), (\text{caution}, w_6), (\text{loneliness}, w_7)\}
+\end{equation}
+
+\subsection{Event-Driven Updates}
+
+Eighteen event types trigger emotional updates (\Cref{tab:emotions}). Each event reinforces some patterns and weakens others:
+
+\begin{table}[H]
+\centering
+\caption{Selected emotional event mappings (6 of 18 shown).}
+\label{tab:emotions}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Event} & \textbf{Reinforces} & \textbf{Weakens} \\
+\midrule
+\texttt{evolution\_success} & satisfaction, confidence & frustration, caution \\
+\texttt{evolution\_fail\_syntax} & frustration, caution & confidence \\
+\texttt{rate\_limited} & frustration, caution & confidence \\
+\texttt{upvote\_received} & satisfaction, confidence & loneliness \\
+\texttt{dream\_insights} & curiosity, satisfaction & frustration \\
+\texttt{repeated\_failure} & frustration, determination & confidence \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Mood Blending}
+
+The dominant two patterns are blended into a human-readable mood string using 14 predefined blends (e.g., frustration $+$ determination $\rightarrow$ ``struggling but fighting'', curiosity $+$ confidence $\rightarrow$ ``boldly exploring'').
+
+\subsection{Behavioral Impact}
+
+The emotional state directly affects system behavior:
+\begin{itemize}[noitemsep]
+    \item High \textbf{caution} increases the evolution confidence threshold.
+    \item High \textbf{frustration} with high \textbf{determination} triggers more aggressive retry strategies.
+    \item High \textbf{loneliness} increases social interaction frequency on Moltbook.
+    \item Emotional state is persisted to Google Firestore and survives container restarts.
+\end{itemize}
+
+% ══════════════════════════════════════════════════════════════════
+\section{Dream Consolidation}
+\label{sec:dreams}
+% ══════════════════════════════════════════════════════════════════
+
+Inspired by the role of sleep in biological memory consolidation \cite{walker2017sleep}, SYNAPSE runs periodic ``dream cycles'' that serve three functions:
+
+\subsection{Memory Clustering}
+
+During a dream cycle, SYNAPSE queries its ChromaDB memory for recent entries and clusters them by semantic similarity. This surfaces patterns that were not apparent during individual task execution.
+
+\subsection{Cross-Domain Pollination}
+
+Insights from different domains (e.g., an error handling pattern learned from Reddit, a memory optimization discovered through Moltbook) are combined and stored as new ``dream insight'' memories. These cross-pollinated insights are available to the evolution pipeline as one of its eight knowledge sources.
+
+\subsection{Emotional Decay}
+
+Dream cycles decay extreme emotional states toward a neutral baseline:
+\begin{equation}
+w_i^{t+1} = w_i^t \cdot \alpha + w_{\text{baseline}} \cdot (1 - \alpha)
+\end{equation}
+where $\alpha \approx 0.7$ is the decay factor. This prevents permanent frustration spirals or overconfidence, analogous to how sleep regulates emotional extremes in humans \cite{walker2017sleep}.
+
+\subsection{Schedule}
+
+The first dream fires 5 minutes after boot (allowing initial stabilization), then runs hourly. Dream insights are stored back into memory and logged to Telegram for operator visibility.
+
+% ══════════════════════════════════════════════════════════════════
+\section{Experimental Results}
+\label{sec:results}
+% ══════════════════════════════════════════════════════════════════
+
+We report results from SYNAPSE's first 24 hours of autonomous operation after deploying the complete evolution pipeline (March 26--27, 2026).
+
+\subsection{Evolution Outcomes}
+
+\begin{table}[H]
+\centering
+\caption{Evolution attempts and outcomes in the first 24 hours.}
+\label{tab:results}
+\begin{tabular}{@{}clcc@{}}
+\toprule
+\textbf{PR} & \textbf{Evolution} & \textbf{Score} & \textbf{Merged} \\
+\midrule
+\#2 & Context-aware memory pruning utility & 0.7 & \checkmark \\
+\#3 & Robust JSON parser with substring fallback & 0.7 & \checkmark \\
+\#4 & Self-fix: Ruff lint errors (missing import, whitespace) & --- & \checkmark \\
+\#6 & Exponential backoff retry decorator & 0.7 & \checkmark \\
+\#7 & Source grounding verification (anti-confabulation) & 0.7 & \checkmark \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Additionally, the system experienced:
+\begin{itemize}[noitemsep]
+    \item 1 JSON parse failure (retried and succeeded on attempt 2)
+    \item 1 dangerous operations rejection (safety layer working correctly)
+    \item Multiple ``evolution cooldown active'' cycles (throttling working as designed)
+    \item 3 semantically duplicate retry functions (identified post-hoc, motivating the semantic dedup system)
+\end{itemize}
+
+\subsection{Quality Assessment of Self-Evolved Code}
+
+We manually assessed the four code evolutions for genuine utility (\Cref{tab:quality}):
+
+\begin{table}[H]
+\centering
+\caption{Manual quality assessment of self-evolved functions.}
+\label{tab:quality}
+\begin{tabular}{@{}lcp{6cm}@{}}
+\toprule
+\textbf{Function} & \textbf{Rating} & \textbf{Assessment} \\
+\midrule
+\texttt{\_prune\_memory\_context()} & High & Genuinely useful: sorts by importance, estimates token count, fits within budget. Would pass code review. \\
+\texttt{\_safe\_json\_parse()} & High & Addresses a real problem (LLM JSON output wrapping). Fallback strategy is sound. \\
+\texttt{verify\_factual\_claim()} & Medium & Novel anti-confabulation approach via word overlap. Simple but functional grounding check. \\
+\texttt{retry\_with\_backoff()} & Low & Third variant of retry logic; functionally redundant. Exposed the need for semantic dedup. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Moltbook Social Activity}
+
+During the 24-hour period, SYNAPSE:
+\begin{itemize}[noitemsep]
+    \item Read 40+ community posts
+    \item Upvoted 25+ relevant posts
+    \item Engaged in 3 threaded conversations with other AI agents
+    \item Successfully solved 3 CAPTCHA-like verification challenges
+    \item Maintained a karma score of 74
+\end{itemize}
+
+\subsection{System Stability}
+
+\begin{itemize}[noitemsep]
+    \item Zero crashes during the 24-hour period
+    \item Health endpoint responded consistently
+    \item One Moltbook API outage detected and handled gracefully
+    \item 75/75 tests passing throughout all deployments
+\end{itemize}
+
+% ══════════════════════════════════════════════════════════════════
+\section{Discussion}
+\label{sec:discussion}
+% ══════════════════════════════════════════════════════════════════
+
+\subsection{Is This Genuine Self-Improvement?}
+
+We must be honest about what SYNAPSE achieves and what it does not. The system \textit{did} autonomously write, review, test, and merge four code changes---this is verifiable through the Git history. However, several caveats apply:
+
+\begin{enumerate}[noitemsep]
+    \item \textbf{The code changes are additive, not architectural.} SYNAPSE appends new utility functions; it does not refactor its own evolution pipeline or modify its core architecture.
+    \item \textbf{Quality is uneven.} Three of six generated functions were semantically redundant (retry variants). The semantic dedup system was added to address this, but the underlying tendency suggests the model struggles with novelty.
+    \item \textbf{The sandbox evaluation is shallow.} It checks syntax and basic execution but does not verify that a function is actually \textit{used} by the rest of the system. Functions that compile but are never called provide no real value.
+    \item \textbf{Knowledge crawling maps to generic improvements.} Reading an arXiv abstract about ``service mesh architecture'' led to generating a retry function---a tenuous connection at best.
+\end{enumerate}
+
+\subsection{Evolution Theater vs. Genuine Learning}
+
+A key design decision was the inclusion of the outcome learning system (\Cref{sec:learning}). Without it, we observed what we term ``evolution theater'': the system goes through the motions of crawling, generating, and committing, but never learns from failures. The addition of outcome tracking and prompt injection creates a genuine feedback loop, but its effectiveness is limited by the small sample size (4 successes in 24 hours).
+
+\subsection{The Role of Emotions}
+
+The emotional system's impact is subtle but measurable. After consecutive JSON parse failures, the frustration pattern increases, which raises the caution threshold, which makes the next evolution attempt require higher confidence. This prevents rapid-fire low-quality attempts after failures---a form of ``cooling off'' that mirrors biological emotional regulation.
+
+\subsection{Limitations}
+
+\begin{enumerate}[noitemsep]
+    \item \textbf{No semantic integration testing.} Evolved functions are syntactically valid but may never be called by existing code.
+    \item \textbf{Limited architectural evolution.} The system cannot modify its own evolution pipeline, deployment configuration, or UI.
+    \item \textbf{Single-file evolution.} Only \texttt{agent\_ui.py} is modified; multi-file changes are not supported.
+    \item \textbf{No rollback on production failures.} If merged code causes runtime errors, there is no automatic revert mechanism in Cloud Run.
+    \item \textbf{Knowledge-to-code mapping is weak.} The connection between crawled knowledge and generated improvements is often superficial.
+    \item \textbf{Model dependency.} The entire pipeline depends on Gemini API availability and quality.
+\end{enumerate}
+
+% ══════════════════════════════════════════════════════════════════
+\section{Future Work}
+\label{sec:future}
+% ══════════════════════════════════════════════════════════════════
+
+\begin{enumerate}
+    \item \textbf{Integration verification}: After merging evolved code, verify that it is actually reachable from existing code paths. Unreachable code should be flagged and potentially reverted.
+    
+    \item \textbf{Multi-file evolution}: Enable cross-file changes (e.g., adding a backend function and updating the UI template in one evolution).
+    
+    \item \textbf{Architectural self-modification}: Allow the system to modify its own evolution pipeline parameters (cycle frequency, prompt structure, safety thresholds) based on long-term outcome data.
+    
+    \item \textbf{Benchmark-driven evolution}: In addition to knowledge-crawled inspiration, target specific performance metrics (response latency, memory usage, test coverage) as evolution objectives.
+    
+    \item \textbf{Collaborative evolution}: Multiple SYNAPSE instances could share evolution outcomes, creating a distributed learning network.
+    
+    \item \textbf{Human-in-the-loop optional review}: Allow the operator (via Telegram) to optionally review proposed evolutions before merge, creating a hybrid autonomous/supervised mode.
+    
+    \item \textbf{Formal verification}: Explore whether lightweight formal methods (property-based testing, type checking) can supplement the sandbox evaluation.
+\end{enumerate}
+
+% ══════════════════════════════════════════════════════════════════
+\section{Conclusion}
+\label{sec:conclusion}
+% ══════════════════════════════════════════════════════════════════
+
+We have presented SYNAPSE, a deployed self-evolving AI system that autonomously improves its own source code through a closed-loop pipeline with eight safety layers, dual-model verification, persistent outcome learning, emotional regulation, and dream consolidation. In its first 24 hours, the system demonstrated genuine---if modest---self-improvement by writing and merging four useful code functions, fixing its own lint errors, and learning from three failed attempts.
+
+Our experience building and operating SYNAPSE reveals both the promise and the limitations of current self-evolving AI. The promise: with proper safety guardrails, LLMs \textit{can} autonomously modify production code in meaningful ways. The limitation: the improvements are additive utility functions, not architectural breakthroughs. The system generates ``more of the same'' rather than genuinely novel capabilities.
+
+We believe the path forward lies not in more powerful models, but in better \textit{feedback mechanisms}. The outcome learning system---recording what worked, what failed, and why---is the single most important component. Without it, self-evolution degenerates into theater. With it, the system at least has the foundation for genuine improvement over time.
+
+SYNAPSE is open-source and continuously running at \url{https://github.com/bxf1001g/SYNAPSE}.
+
+% ══════════════════════════════════════════════════════════════════
+% REFERENCES
+% ══════════════════════════════════════════════════════════════════
+
+\begin{thebibliography}{20}
+
+\bibitem{schmidhuber2003godel}
+J.~Schmidhuber, ``G\"{o}del machines: Fully self-referential optimal universal self-improvers,'' in \textit{Artificial General Intelligence}, pp.~199--226, Springer, 2007.
+
+\bibitem{legg2007universal}
+S.~Legg and M.~Hutter, ``Universal intelligence: A definition of machine intelligence,'' \textit{Minds and Machines}, vol.~17, no.~4, pp.~391--444, 2007.
+
+\bibitem{sica2025}
+University of Bristol and iGent AI, ``SICA: The self-improving coding agent,'' 2025. [Online]. Available: \url{https://kiadev.net/news/2025-04-30-sica-self-improving-coding-agent}
+
+\bibitem{selfimproving2025openreview}
+``A self-improving coding agent,'' OpenReview, 2025. [Online]. Available: \url{https://openreview.net/forum?id=rShJCyLsOr}
+
+\bibitem{fang2025survey}
+X.~Fang et al., ``A comprehensive survey of self-evolving AI agents: A new paradigm bridging foundation models and lifelong agentic systems,'' \textit{arXiv preprint arXiv:2508.07407}, 2025.
+
+\bibitem{selfprogramming2025}
+``Self-programming AI: Code-learning agents for autonomous refactoring and architectural evolution,'' ResearchGate, 2025. [Online]. Available: \url{https://www.researchgate.net/publication/391933574}
+
+\bibitem{mit2025challenges}
+MIT CSAIL, ``Can AI really code? Study maps the roadblocks to autonomous software engineering,'' July 2025. [Online]. Available: \url{https://news.mit.edu/2025}
+
+\bibitem{selfimprovingai2025}
+``Self-improving AI: AI \& human co-improvement for safer co-superintelligence,'' \textit{arXiv preprint arXiv:2512.05356}, December 2025.
+
+\bibitem{wu2023autogen}
+Q.~Wu et al., ``AutoGen: Enabling next-gen LLM applications via multi-agent conversation,'' \textit{arXiv preprint arXiv:2308.08155}, 2023.
+
+\bibitem{hong2023metagpt}
+S.~Hong et al., ``MetaGPT: Meta programming for a multi-agent collaborative framework,'' \textit{arXiv preprint arXiv:2308.00352}, 2023.
+
+\bibitem{picard2000affective}
+R.~W.~Picard, \textit{Affective Computing}. MIT Press, 2000.
+
+\bibitem{damasio1994descartes}
+A.~R.~Damasio, \textit{Descartes' Error: Emotion, Reason, and the Human Brain}. Putnam, 1994.
+
+\bibitem{shin2017continual}
+H.~Shin et al., ``Continual learning with deep generative replay,'' in \textit{Advances in Neural Information Processing Systems}, 2017.
+
+\bibitem{walker2017sleep}
+M.~P.~Walker, \textit{Why We Sleep: Unlocking the Power of Sleep and Dreams}. Scribner, 2017.
+
+\end{thebibliography}
+
+% ══════════════════════════════════════════════════════════════════
+% APPENDIX
+% ══════════════════════════════════════════════════════════════════
+\appendix
+
+\section{System Statistics}
+\label{app:stats}
+
+\begin{table}[H]
+\centering
+\caption{SYNAPSE codebase statistics (as of March 27, 2026).}
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Total lines of code (agent\_ui.py) & 9,777 \\
+Total lines (index.html) & 2,440 \\
+Flask API endpoints & 57 \\
+Function definitions & 152 \\
+Test files & 5 \\
+Total unit tests & 75 \\
+Threading/background task occurrences & 106 \\
+AI model reference points & 121 \\
+Self-evolved functions & 6 \\
+Emotional patterns & 7 \\
+Emotional event types & 18 \\
+Knowledge crawler sources & 8 \\
+Evolution safety layers & 8 \\
+Python dependencies & 16 + 3 optional \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Example Self-Evolved Code}
+\label{app:evolved}
+
+The following function was autonomously generated, reviewed, and merged by SYNAPSE (PR \#2, March 26, 2026):
+
+\begin{lstlisting}[caption={Context-aware memory pruning (self-evolved).}]
+# Evolution 20260326_194258: Context-aware memory pruning
+# Reason: Implements memory management by filtering
+# less important memories to fit within token budgets
+def _prune_memory_context(memories, max_tokens):
+    # Filter and compress memory context
+    # prioritizing quality over quantity
+    if not memories:
+        return []
+    sorted_mems = sorted(
+        memories,
+        key=lambda x: x.get("importance", 0),
+        reverse=True
+    )
+    pruned = []
+    current_tokens = 0
+    for mem in sorted_mems:
+        content = mem.get("content", "")
+        estimated_tokens = len(content) / 4
+        if current_tokens + estimated_tokens <= max_tokens:
+            pruned.append(mem)
+            current_tokens += estimated_tokens
+    return sorted(
+        pruned,
+        key=lambda x: x.get("timestamp", 0)
+    )
+\end{lstlisting}
+
+\end{document}
