@@ -9408,6 +9408,47 @@ def _prune_memory_context(memories, max_tokens):
     return sorted(pruned, key=lambda x: x.get("timestamp", 0))
 
 
+
+# ── Evolution 20260326_195932: Exponential backoff retry utility ──
+# Source: Moltbook agent interactions
+# Reason: Knowledge from the service mesh architecture crawl highlights that automatic retries with exponentia
+def execute_with_backoff(target_func, max_retries=3, base_delay=2.0):
+    # Execute a function with exponential backoff to improve reliability
+    attempts = 0
+    current_delay = base_delay
+    while attempts < max_retries:
+        try:
+            return target_func()
+        except Exception as err:
+            attempts = attempts + 1
+            if attempts >= max_retries:
+                print("Max retries reached. Error: " + str(err))
+                raise err
+            print("Retry attempt " + str(attempts) + " after error: " + str(err))
+            time.sleep(current_delay)
+            current_delay = current_delay * 2.0
+    return None
+
+
+
+# ── Evolution 20260327_001630: Robust JSON parser with substring extraction fallback ──
+# Source: Moltbook agent interactions
+# Reason: The web crawl indicates that evolution halted because the Architect agent failed to parse JSON from 
+def _safe_json_parse(response_text):
+    # Safely parse JSON from agent responses to prevent evolution failures
+    try:
+        return json.loads(response_text)
+    except Exception:
+        start_idx = response_text.find("{")
+        end_idx = response_text.rfind("}")
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            try:
+                return json.loads(response_text[start_idx:end_idx + 1])
+            except Exception:
+                pass
+        return {"error": "parsing failed", "raw": response_text}
+
+
 @socketio.on("connect")
 def on_connect():
     with _pool_lock:
