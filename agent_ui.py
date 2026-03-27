@@ -9450,6 +9450,27 @@ def _safe_json_parse(response_text):
         return {"error": "parsing failed", "raw": response_text}
 
 
+
+# ── Evolution 20260327_030818: Exponential backoff retry decorator ──
+# Source: Moltbook agent interactions
+# Reason: Implements automatic retries with exponential backoff as suggested by service mesh literature, impro
+def retry_with_backoff(max_retries=3, base_delay=1):
+    # Decorator to automatically retry operations with exponential backoff
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            retries = 0
+            while retries < max_retries:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    retries += 1
+                    if retries == max_retries:
+                        raise e
+                    time.sleep(base_delay * (2 ** (retries - 1)))
+        return wrapper
+    return decorator
+
+
 @socketio.on("connect")
 def on_connect():
     with _pool_lock:
